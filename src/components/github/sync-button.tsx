@@ -5,6 +5,7 @@ import {
   ArrowDownToLine,
   ArrowUpFromLine,
   GitPullRequest,
+  GitBranch,
   Loader2,
   ChevronDown,
   RefreshCw,
@@ -28,6 +29,7 @@ interface SyncButtonProps {
   onPull: () => Promise<void>;
   onPush: () => Promise<void>;
   onCreatePR: () => void;
+  onCreateBranch?: () => void;
 }
 
 const statusIcons: Record<SyncStatus, React.ReactNode> = {
@@ -39,7 +41,7 @@ const statusIcons: Record<SyncStatus, React.ReactNode> = {
   error: <AlertCircle className="h-3.5 w-3.5 text-red-500" />,
 };
 
-export function SyncButton({ onPull, onPush, onCreatePR }: SyncButtonProps) {
+export function SyncButton({ onPull, onPush, onCreatePR, onCreateBranch }: SyncButtonProps) {
   const { syncStatus, isSyncing, currentBranch } = useSyncStore();
   const { dirtyFiles } = useFileStore();
   const [pulling, setPulling] = useState(false);
@@ -80,6 +82,12 @@ export function SyncButton({ onPull, onPush, onCreatePR }: SyncButtonProps) {
           Push to {currentBranch}
         </DropdownMenuItem>
         <DropdownMenuSeparator />
+        {onCreateBranch && (
+          <DropdownMenuItem onClick={onCreateBranch}>
+            <GitBranch className="mr-2 h-4 w-4" />
+            Create new branch
+          </DropdownMenuItem>
+        )}
         <DropdownMenuItem onClick={onCreatePR}>
           <GitPullRequest className="mr-2 h-4 w-4" />
           Create Pull Request

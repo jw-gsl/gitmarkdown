@@ -12,6 +12,20 @@ export async function POST(request: NextRequest) {
     const resolvedProvider = (provider || getDefaultModel().provider) as AIProvider;
     const resolvedModel = modelId || getDefaultModel().modelId;
 
+    // Validate API key exists for the selected provider
+    if (resolvedProvider === 'anthropic' && !process.env.ANTHROPIC_API_KEY) {
+      return new Response(
+        JSON.stringify({ error: 'Anthropic API key not configured. Add ANTHROPIC_API_KEY to .env.local' }),
+        { status: 400, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+    if (resolvedProvider === 'openai' && !process.env.OPENAI_API_KEY) {
+      return new Response(
+        JSON.stringify({ error: 'OpenAI API key not configured. Add OPENAI_API_KEY to .env.local' }),
+        { status: 400, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
     const result = streamText({
       model: getAIModel(resolvedProvider, resolvedModel),
       system: `You are an inline text editor. The user has selected some text and wants you to modify it based on their instruction.

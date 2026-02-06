@@ -2,8 +2,6 @@
 
 A collaborative markdown editor with two-way GitHub sync, real-time collaboration, and AI-powered editing.
 
-![GitMarkdown Screenshot](./docs/screenshot.png)
-
 ## Overview
 
 GitMarkdown is a modern, web-based markdown editor that seamlessly integrates with GitHub repositories. Edit markdown files with a rich WYSIWYG interface, collaborate in real-time with team members, and sync changes directly to GitHub. Built with Next.js 16 and powered by Tiptap v3, GitMarkdown combines the simplicity of markdown with the power of modern web technologies.
@@ -92,51 +90,65 @@ GitMarkdown is a modern, web-based markdown editor that seamlessly integrates wi
 
 ## Getting Started
 
+> For a comprehensive step-by-step walkthrough, see the **[Complete Setup Guide](docs/SETUP.md)**.
+
 ### Prerequisites
 
 - Node.js 20+ and npm/yarn/pnpm
-- GitHub account for OAuth setup
-- Firebase project with Authentication, Firestore, and Realtime Database enabled
-- API keys for Anthropic and/or OpenAI
+- A GitHub account
+- A Firebase project (free Spark plan works)
+- An Anthropic and/or OpenAI API key (for AI features)
 
-### Installation
-
-1. Clone the repository:
+### Quick Start
 
 ```bash
+# 1. Clone and install
 git clone https://github.com/pooriaarab/gitmarkdown.git
 cd gitmarkdown
-```
-
-2. Install dependencies:
-
-```bash
 npm install
-# or
-yarn install
-# or
-pnpm install
-```
 
-3. Set up environment variables:
-
-Copy `.env.example` to `.env.local` and fill in your credentials:
-
-```bash
+# 2. Copy the env template
 cp .env.example .env.local
-```
 
-4. Configure the environment variables (see below)
+# 3. Fill in your credentials (see sections below)
 
-5. Run the development server:
-
-```bash
+# 4. Run
 npm run dev
 ```
 
-6. Open [http://localhost:3000](http://localhost:3000) in your browser
+Open [http://localhost:3000](http://localhost:3000) in your browser.
 
-## Environment Variables
+### Firebase Setup
+
+1. Create a project at [Firebase Console](https://console.firebase.google.com/)
+2. **Register a Web App** (Project Settings > General > Add app > Web) — copy the config values to `.env.local`
+3. **Enable Authentication** (Build > Authentication > Sign-in method > GitHub) — you'll need the GitHub OAuth credentials from the next step
+4. **Enable Cloud Firestore** (Build > Firestore Database > Create database > Start in test mode)
+5. **Enable Realtime Database** (Build > Realtime Database > Create Database) — copy the URL (e.g. `https://your-project-default-rtdb.firebaseio.com`) to `NEXT_PUBLIC_FIREBASE_DATABASE_URL`
+6. **Generate Admin SDK key** (Project Settings > Service Accounts > Generate new private key) — copy `project_id`, `client_email`, and `private_key` to `.env.local`
+7. **Apply security rules** — see [Security Rules](#security-rules) below
+
+### GitHub OAuth Setup
+
+1. Go to [GitHub Developer Settings > OAuth Apps > New](https://github.com/settings/applications/new)
+2. Set:
+   - **Homepage URL**: `http://localhost:3000`
+   - **Callback URL**: `https://<YOUR_FIREBASE_PROJECT_ID>.firebaseapp.com/__/auth/handler`
+3. Copy the **Client ID** and **Client Secret**
+4. Enter them in **both**:
+   - Your `.env.local` (`GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET`)
+   - Firebase Console > Authentication > Sign-in method > GitHub
+
+### AI Provider Keys
+
+At least one is required for AI features:
+
+- **Anthropic**: Get a key at [console.anthropic.com](https://console.anthropic.com/settings/keys) → set `ANTHROPIC_API_KEY`
+- **OpenAI**: Get a key at [platform.openai.com](https://platform.openai.com/api-keys) → set `OPENAI_API_KEY`
+
+### Environment Variables
+
+See [`.env.example`](.env.example) for the full list with inline comments explaining where to find each value.
 
 | Variable | Description | Required |
 |----------|-------------|----------|
@@ -146,37 +158,82 @@ npm run dev
 | `NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET` | Firebase storage bucket | Yes |
 | `NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID` | Firebase messaging sender ID | Yes |
 | `NEXT_PUBLIC_FIREBASE_APP_ID` | Firebase app ID | Yes |
-| `NEXT_PUBLIC_FIREBASE_DATABASE_URL` | Firebase Realtime Database URL | Yes |
-| `FIREBASE_ADMIN_PROJECT_ID` | Firebase Admin project ID | Yes |
-| `FIREBASE_ADMIN_CLIENT_EMAIL` | Firebase Admin service account email | Yes |
-| `FIREBASE_ADMIN_PRIVATE_KEY` | Firebase Admin service account private key | Yes |
+| `NEXT_PUBLIC_FIREBASE_DATABASE_URL` | Realtime Database URL | Yes |
+| `FIREBASE_ADMIN_PROJECT_ID` | Admin SDK project ID | Yes |
+| `FIREBASE_ADMIN_CLIENT_EMAIL` | Admin SDK service account email | Yes |
+| `FIREBASE_ADMIN_PRIVATE_KEY` | Admin SDK private key (wrap in quotes) | Yes |
 | `GITHUB_CLIENT_ID` | GitHub OAuth app client ID | Yes |
 | `GITHUB_CLIENT_SECRET` | GitHub OAuth app client secret | Yes |
-| `ANTHROPIC_API_KEY` | Anthropic API key for Claude | No* |
+| `ANTHROPIC_API_KEY` | Anthropic API key | No* |
 | `OPENAI_API_KEY` | OpenAI API key | No* |
-| `NEXT_PUBLIC_APP_URL` | Your app URL (default: http://localhost:3000) | Yes |
-| `NEXT_PUBLIC_DEFAULT_AI_PROVIDER` | Default AI provider (anthropic or openai) | Yes |
-| `NEXT_PUBLIC_DEFAULT_AI_MODEL` | Default AI model name | Yes |
+| `NEXT_PUBLIC_APP_URL` | App URL (default: http://localhost:3000) | Yes |
+| `NEXT_PUBLIC_DEFAULT_AI_PROVIDER` | `anthropic` or `openai` | Yes |
+| `NEXT_PUBLIC_DEFAULT_AI_MODEL` | Model name | Yes |
 
-*At least one AI provider key is required for AI features to work.
+*At least one AI provider key is required.
 
-### Firebase Setup
+### Security Rules
 
-1. Create a new Firebase project at [firebase.google.com](https://firebase.google.com)
-2. Enable Authentication with GitHub provider
-3. Enable Cloud Firestore and Firebase Realtime Database
-4. Generate a service account key for Firebase Admin SDK
-5. Copy the configuration values to your `.env.local` file
+After creating your Firebase databases, you must apply security rules for them to work.
 
-### GitHub OAuth Setup
+#### Firestore Rules
 
-1. Go to [GitHub Settings > Developer settings > OAuth Apps](https://github.com/settings/applications/new)
-2. Create a new OAuth app with:
-   - **Homepage URL**: `https://gitmarkdown-app.netlify.app` (or `http://localhost:3000` for local dev)
-   - **Authorization callback URL**: `https://<YOUR_PROJECT>.firebaseapp.com/__/auth/handler`
-3. Copy the Client ID and Client Secret
-4. Also enter these in Firebase Console > Authentication > Sign-in method > GitHub
-5. Add them to your `.env.local` file
+Go to **Firebase Console > Firestore Database > Rules** and paste:
+
+```
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /users/{userId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && request.auth.uid == userId;
+    }
+    match /comments/{commentId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null;
+      allow update: if request.auth != null;
+      allow delete: if request.auth != null
+        && resource.data.author.uid == request.auth.uid;
+    }
+    match /workspaces/{workspaceId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null;
+      allow update: if request.auth != null;
+      match /{subcollection}/{docId} {
+        allow read: if request.auth != null;
+        allow write: if request.auth != null;
+      }
+    }
+  }
+}
+```
+
+#### Realtime Database Rules
+
+Go to **Firebase Console > Realtime Database > Rules** and paste:
+
+```json
+{
+  "rules": {
+    "yjs": {
+      "$workspaceId": {
+        "$fileId": {
+          ".read": "auth != null",
+          ".write": "auth != null"
+        }
+      }
+    },
+    ".read": false,
+    ".write": false
+  }
+}
+```
+
+#### Firestore Composite Index
+
+The comments query requires a composite index. The easiest way: run the app, try to open a file, and check the browser console — you'll see an error with a **direct link** to create the index. Click it and confirm.
+
+Alternatively, create it manually: **Firestore > Indexes > Create Index** with collection `comments`, fields `repoFullName` (Asc), `filePath` (Asc), `createdAt` (Asc).
 
 ## Project Structure
 

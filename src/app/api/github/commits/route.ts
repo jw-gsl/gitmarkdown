@@ -37,7 +37,8 @@ export async function GET(request: NextRequest) {
       return NextResponse.json(commit);
     }
 
-    const commits = await listCommits(octokit, owner, repo, { path, sha });
+    const includeStats = searchParams.get('includeStats') === 'true';
+    const commits = await listCommits(octokit, owner, repo, { path, sha, includeStats });
     return NextResponse.json(commits);
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'Failed to fetch commits';

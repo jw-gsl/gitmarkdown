@@ -11,6 +11,7 @@ import {
   orderBy,
   onSnapshot,
   serverTimestamp,
+  Timestamp,
   type DocumentData,
   type QueryConstraint,
   addDoc,
@@ -144,6 +145,68 @@ export async function getVersions(workspaceId: string, maxResults = 50) {
   );
   const snap = await getDocs(q);
   return snap.docs.map((d) => d.data());
+}
+
+// ── Flat-collection comment helpers (no workspaceId required) ──────────
+// Comments are stored in a top-level "comments" collection, keyed by
+// repoFullName (owner/repo) + filePath so the editor page can read/write
+// them without resolving a workspace first.
+
+export function subscribeToFileComments(
+  owner: string,
+  repo: string,
+  filePath: string,
+  onUpdate: (comments: Comment[]) => void
+) {
+  const commentsRef = collection(db, 'comments');
+  const q = query(
+    commentsRef,
+    where('repoFullName', '==', `${owner}/${repo}`),
+    where('filePath', '==', filePath),
+    orderBy('createdAt', 'asc')
+  );
+
+  return onSnapshot(q, (snapshot) => {
+    const comments = snapshot.docs.map((d) => ({
+      id: d.id,
+      ...d.data(),
+      createdAt: (d.data().createdAt as Timestamp | null)?.toDate() ?? new Date(),
+      updatedAt: (d.data().updatedAt as Timestamp | null)?.toDate() ?? new Date(),
+    })) as Comment[];
+    onUpdate(comments);
+  });
+}
+
+export async function addFileComment(
+  owner: string,
+  repo: string,
+  filePath: string,
+  comment: Omit<Comment, 'id' | 'createdAt' | 'updatedAt'>
+) {
+  const commentsRef = collection(db, 'comments');
+  return addDoc(commentsRef, {
+    ...comment,
+    repoFullName: `${owner}/${repo}`,
+    filePath,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+}
+
+export async function updateFileComment(
+  commentId: string,
+  updates: Partial<Comment>
+) {
+  const commentRef = doc(db, 'comments', commentId);
+  return updateDoc(commentRef, {
+    ...updates,
+    updatedAt: serverTimestamp(),
+  });
+}
+
+export async function deleteFileComment(commentId: string) {
+  const commentRef = doc(db, 'comments', commentId);
+  return deleteDoc(commentRef);
 }
 
 export { db };

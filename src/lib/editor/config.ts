@@ -25,6 +25,9 @@ export function getEditorExtensions(options?: { placeholder?: string }) {
   return [
     StarterKit.configure({
       codeBlock: false,
+      // Disable extensions we configure separately to avoid duplicates
+      link: false,
+      underline: false,
     }),
     Placeholder.configure({
       placeholder: options?.placeholder || 'Type "/" for commands...',

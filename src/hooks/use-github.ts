@@ -115,18 +115,39 @@ export function useGitHubContent() {
   return { loading, fetchContent, updateContent, createContent };
 }
 
+// Module-level cache so commit data persists across sidebar open/close cycles
+const _commitsCache = new Map<string, GitHubCommit[]>();
+
 export function useGitHubCommits() {
   const [commits, setCommits] = useState<GitHubCommit[]>([]);
   const [loading, setLoading] = useState(false);
   const fetchWithAuth = useGitHubFetch();
 
   const fetchCommits = useCallback(
-    async (owner: string, repo: string, path?: string) => {
-      setLoading(true);
+    async (owner: string, repo: string, path?: string, options?: { includeStats?: boolean }) => {
+      const cacheKey = `${owner}/${repo}/${path || ''}`;
+      const cached = _commitsCache.get(cacheKey);
+      if (cached) {
+        setCommits(cached);
+      }
+      setLoading(!cached);
       try {
         const params = new URLSearchParams({ owner, repo });
         if (path) params.set('path', path);
-        const data = await fetchWithAuth(`/api/github/commits?${params}`);
+        if (options?.includeStats) params.set('includeStats', 'true');
+        const data: GitHubCommit[] = await fetchWithAuth(`/api/github/commits?${params}`);
+        // Preserve existing stats from cache when new data doesn't have them
+        if (cached) {
+          const existingStats = new Map(
+            cached.filter((c) => c.stats).map((c) => [c.sha, c.stats!])
+          );
+          for (const commit of data) {
+            if (!commit.stats && existingStats.has(commit.sha)) {
+              commit.stats = existingStats.get(commit.sha);
+            }
+          }
+        }
+        _commitsCache.set(cacheKey, data);
         setCommits(data);
         return data;
       } finally {
@@ -144,6 +165,26 @@ export function useGitHubCommits() {
   );
 
   return { commits, loading, fetchCommits, fetchCommit };
+}
+
+/** Lightweight pre-fetch that populates the module-level cache without managing state */
+export function useCommitsPrefetch() {
+  const fetchWithAuth = useGitHubFetch();
+  return useCallback(
+    async (owner: string, repo: string, path?: string) => {
+      const cacheKey = `${owner}/${repo}/${path || ''}`;
+      if (_commitsCache.has(cacheKey)) return;
+      try {
+        const params = new URLSearchParams({ owner, repo });
+        if (path) params.set('path', path);
+        const data = await fetchWithAuth(`/api/github/commits?${params}`);
+        _commitsCache.set(cacheKey, data);
+      } catch {
+        // Silent fail for pre-fetch
+      }
+    },
+    [fetchWithAuth]
+  );
 }
 
 export function useGitHubBranches() {
@@ -176,4 +217,26 @@ export function useGitHubBranches() {
   );
 
   return { branches, loading, fetchBranches, createBranch };
+}
+
+export function useGitHubPulls() {
+  const [loading, setLoading] = useState(false);
+  const fetchWithAuth = useGitHubFetch();
+
+  const createPR = useCallback(
+    async (owner: string, repo: string, title: string, body: string, head: string, base: string) => {
+      setLoading(true);
+      try {
+        return await fetchWithAuth('/api/github/pulls', {
+          method: 'POST',
+          body: JSON.stringify({ owner, repo, title, body, head, base }),
+        });
+      } finally {
+        setLoading(false);
+      }
+    },
+    [fetchWithAuth]
+  );
+
+  return { loading, createPR };
 }

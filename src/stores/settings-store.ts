@@ -2,6 +2,9 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { AIProvider } from '@/types';
 
+export type SaveStrategy = 'main' | 'branch';
+export type CommitValidationLevel = 'none' | 'warning' | 'error';
+
 interface SettingsStoreState {
   theme: 'light' | 'dark' | 'system';
   aiProvider: AIProvider;
@@ -9,6 +12,17 @@ interface SettingsStoreState {
   editorFontSize: number;
   editorLineHeight: number;
   showLineNumbers: boolean;
+  autoCommitDelay: number;
+  saveStrategy: SaveStrategy;
+  autoBranchPrefix: string;
+  excludeBranches: string[];
+  commitOnClose: boolean;
+  aiCommitMessages: boolean;
+  pullOnOpen: boolean;
+  filePattern: string;
+  autoCreatePR: boolean;
+  autoCreatePRTitle: string;
+  commitValidationLevel: CommitValidationLevel;
 
   setTheme: (theme: SettingsStoreState['theme']) => void;
   setAIProvider: (provider: AIProvider) => void;
@@ -16,6 +30,17 @@ interface SettingsStoreState {
   setEditorFontSize: (size: number) => void;
   setEditorLineHeight: (height: number) => void;
   setShowLineNumbers: (show: boolean) => void;
+  setAutoCommitDelay: (delay: number) => void;
+  setSaveStrategy: (strategy: SaveStrategy) => void;
+  setAutoBranchPrefix: (prefix: string) => void;
+  setExcludeBranches: (branches: string[]) => void;
+  setCommitOnClose: (enabled: boolean) => void;
+  setAiCommitMessages: (enabled: boolean) => void;
+  setPullOnOpen: (enabled: boolean) => void;
+  setFilePattern: (pattern: string) => void;
+  setAutoCreatePR: (enabled: boolean) => void;
+  setAutoCreatePRTitle: (title: string) => void;
+  setCommitValidationLevel: (level: CommitValidationLevel) => void;
 }
 
 export const useSettingsStore = create<SettingsStoreState>()(
@@ -27,6 +52,17 @@ export const useSettingsStore = create<SettingsStoreState>()(
       editorFontSize: 16,
       editorLineHeight: 1.6,
       showLineNumbers: false,
+      autoCommitDelay: 30,
+      saveStrategy: 'main',
+      autoBranchPrefix: 'gitmarkdown-auto/',
+      excludeBranches: [],
+      commitOnClose: true,
+      aiCommitMessages: false,
+      pullOnOpen: true,
+      filePattern: '**/*',
+      autoCreatePR: false,
+      autoCreatePRTitle: 'Auto-save changes from GitMarkdown',
+      commitValidationLevel: 'none',
 
       setTheme: (theme) => set({ theme }),
       setAIProvider: (provider) => set({ aiProvider: provider }),
@@ -34,6 +70,17 @@ export const useSettingsStore = create<SettingsStoreState>()(
       setEditorFontSize: (size) => set({ editorFontSize: size }),
       setEditorLineHeight: (height) => set({ editorLineHeight: height }),
       setShowLineNumbers: (show) => set({ showLineNumbers: show }),
+      setAutoCommitDelay: (delay) => set({ autoCommitDelay: delay }),
+      setSaveStrategy: (strategy) => set({ saveStrategy: strategy }),
+      setAutoBranchPrefix: (prefix) => set({ autoBranchPrefix: prefix }),
+      setExcludeBranches: (branches) => set({ excludeBranches: branches }),
+      setCommitOnClose: (enabled) => set({ commitOnClose: enabled }),
+      setAiCommitMessages: (enabled) => set({ aiCommitMessages: enabled }),
+      setPullOnOpen: (enabled) => set({ pullOnOpen: enabled }),
+      setFilePattern: (pattern) => set({ filePattern: pattern }),
+      setAutoCreatePR: (enabled) => set({ autoCreatePR: enabled }),
+      setAutoCreatePRTitle: (title) => set({ autoCreatePRTitle: title }),
+      setCommitValidationLevel: (level) => set({ commitValidationLevel: level }),
     }),
     { name: 'gitmarkdown-settings' }
   )

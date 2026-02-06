@@ -3,6 +3,7 @@
 import { Check, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { computeLineDiff, type DiffLine } from '@/lib/utils/diff';
+import { cn } from '@/lib/utils';
 
 interface DiffViewProps {
   original: string;
@@ -10,13 +11,14 @@ interface DiffViewProps {
   onAccept?: () => void;
   onReject?: () => void;
   showActions?: boolean;
+  className?: string;
 }
 
-export function DiffView({ original, modified, onAccept, onReject, showActions = true }: DiffViewProps) {
+export function DiffView({ original, modified, onAccept, onReject, showActions = true, className }: DiffViewProps) {
   const diffLines = computeLineDiff(original, modified);
 
   return (
-    <div className="rounded-lg border overflow-hidden">
+    <div className={cn("rounded-lg border overflow-hidden", className)}>
       <div className="max-h-96 overflow-auto">
         <table className="w-full text-xs font-mono">
           <tbody>

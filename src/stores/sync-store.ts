@@ -3,6 +3,8 @@ import type { SyncStatus } from '@/types';
 
 interface SyncStoreState {
   currentBranch: string;
+  baseBranch: string;
+  autoBranchName: string | null;
   branches: string[];
   lastSyncedSha: string | null;
   syncStatus: SyncStatus;
@@ -10,6 +12,8 @@ interface SyncStoreState {
   isSyncing: boolean;
 
   setCurrentBranch: (branch: string) => void;
+  setBaseBranch: (branch: string) => void;
+  setAutoBranchName: (name: string | null) => void;
   setBranches: (branches: string[]) => void;
   setLastSyncedSha: (sha: string | null) => void;
   setSyncStatus: (status: SyncStatus) => void;
@@ -22,6 +26,8 @@ interface SyncStoreState {
 
 export const useSyncStore = create<SyncStoreState>((set) => ({
   currentBranch: 'main',
+  baseBranch: 'main',
+  autoBranchName: null,
   branches: [],
   lastSyncedSha: null,
   syncStatus: 'synced',
@@ -29,6 +35,8 @@ export const useSyncStore = create<SyncStoreState>((set) => ({
   isSyncing: false,
 
   setCurrentBranch: (branch) => set({ currentBranch: branch }),
+  setBaseBranch: (branch) => set({ baseBranch: branch }),
+  setAutoBranchName: (name) => set({ autoBranchName: name }),
   setBranches: (branches) => set({ branches }),
   setLastSyncedSha: (sha) => set({ lastSyncedSha: sha }),
   setSyncStatus: (status) => set({ syncStatus: status }),

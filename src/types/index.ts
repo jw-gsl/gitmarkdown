@@ -57,6 +57,7 @@ export interface GitHubCommit {
   };
   html_url: string;
   parents: { sha: string }[];
+  stats?: { additions: number; deletions: number };
 }
 
 export interface GitHubBranch {

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useMemo } from 'react';
-import { ChevronRight, ChevronDown, File, Folder, FolderOpen, Search, Eye, EyeOff } from 'lucide-react';
+import { ChevronRight, ChevronDown, File, Folder, FolderOpen, Search } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Toggle } from '@/components/ui/toggle';
@@ -122,8 +122,7 @@ export function FileTree({ onFileSelect }: FileTreeProps) {
             className="h-8 pl-8 text-xs"
           />
         </div>
-        <div className="flex items-center justify-between">
-          <span className="text-xs font-medium text-muted-foreground">FILES</span>
+        <div className="flex items-center">
           <TooltipProvider>
             <Tooltip>
               <TooltipTrigger asChild>
@@ -131,13 +130,13 @@ export function FileTree({ onFileSelect }: FileTreeProps) {
                   size="sm"
                   pressed={!showAllFiles}
                   onPressedChange={(pressed) => setShowAllFiles(!pressed)}
-                  className="h-6 w-6 p-0"
+                  className="h-6 px-1.5 text-[10px] font-mono font-bold"
                 >
-                  {showAllFiles ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
+                  <span className={showAllFiles ? 'text-muted-foreground' : 'text-primary'}>.md</span>
                 </Toggle>
               </TooltipTrigger>
               <TooltipContent>
-                <p className="text-xs">{showAllFiles ? 'Showing all files' : 'Markdown files only'}</p>
+                <p className="text-xs">{showAllFiles ? 'All files — click to filter .md only' : 'Markdown files only — click to show all'}</p>
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>
