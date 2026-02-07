@@ -57,20 +57,44 @@ export const useUIStore = create<UIStoreState>((set, get) => ({
 
   setSidebarOpen: (open) => set({ sidebarOpen: open }),
   toggleSidebar: () => set({ sidebarOpen: !get().sidebarOpen }),
-  setAISidebarOpen: (open) => set({ aiSidebarOpen: open, activePanel: open ? 'ai' : get().activePanel }),
+  setAISidebarOpen: (open) => set({
+    aiSidebarOpen: open,
+    ...(open ? { commentSidebarOpen: false, versionHistoryOpen: false } : {}),
+    activePanel: open ? 'ai' : get().activePanel,
+  }),
   toggleAISidebar: () => {
     const isOpen = !get().aiSidebarOpen;
-    set({ aiSidebarOpen: isOpen, activePanel: isOpen ? 'ai' : 'files' });
+    set({
+      aiSidebarOpen: isOpen,
+      ...(isOpen ? { commentSidebarOpen: false, versionHistoryOpen: false } : {}),
+      activePanel: isOpen ? 'ai' : 'files',
+    });
   },
-  setCommentSidebarOpen: (open) => set({ commentSidebarOpen: open, activePanel: open ? 'comments' : get().activePanel }),
+  setCommentSidebarOpen: (open) => set({
+    commentSidebarOpen: open,
+    ...(open ? { aiSidebarOpen: false, versionHistoryOpen: false } : {}),
+    activePanel: open ? 'comments' : get().activePanel,
+  }),
   toggleCommentSidebar: () => {
     const isOpen = !get().commentSidebarOpen;
-    set({ commentSidebarOpen: isOpen, activePanel: isOpen ? 'comments' : 'files' });
+    set({
+      commentSidebarOpen: isOpen,
+      ...(isOpen ? { aiSidebarOpen: false, versionHistoryOpen: false } : {}),
+      activePanel: isOpen ? 'comments' : 'files',
+    });
   },
-  setVersionHistoryOpen: (open) => set({ versionHistoryOpen: open, activePanel: open ? 'versions' : get().activePanel }),
+  setVersionHistoryOpen: (open) => set({
+    versionHistoryOpen: open,
+    ...(open ? { aiSidebarOpen: false, commentSidebarOpen: false } : {}),
+    activePanel: open ? 'versions' : get().activePanel,
+  }),
   toggleVersionHistory: () => {
     const isOpen = !get().versionHistoryOpen;
-    set({ versionHistoryOpen: isOpen, activePanel: isOpen ? 'versions' : 'files' });
+    set({
+      versionHistoryOpen: isOpen,
+      ...(isOpen ? { aiSidebarOpen: false, commentSidebarOpen: false } : {}),
+      activePanel: isOpen ? 'versions' : 'files',
+    });
   },
   setTocOpen: (open) => set({ tocOpen: open }),
   setActivePanel: (panel) => set({ activePanel: panel }),

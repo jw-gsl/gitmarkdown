@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { adminAuth, adminDb } from '@/lib/firebase/admin';
 import { createOctokitClient } from '@/lib/github/client';
-import { getFileContent, updateFileContent, createFile } from '@/lib/github/contents';
+import { getFileContent, updateFileContent, createFile, deleteFile } from '@/lib/github/contents';
 import { decrypt } from '@/app/api/auth/session/route';
 
 async function getOctokitFromRequest(request: NextRequest) {
@@ -68,6 +68,23 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(result);
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'Failed to create file';
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+}
+
+export async function DELETE(request: NextRequest) {
+  try {
+    const { owner, repo, path, sha, message, branch } = await request.json();
+
+    if (!owner || !repo || !path || !sha || !message) {
+      return NextResponse.json({ error: 'Missing params' }, { status: 400 });
+    }
+
+    const { octokit } = await getOctokitFromRequest(request);
+    const result = await deleteFile(octokit, owner, repo, path, sha, message, branch);
+    return NextResponse.json(result);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'Failed to delete file';
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

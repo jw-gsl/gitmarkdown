@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useCallback } from 'react';
-import { History, X } from 'lucide-react';
+import { X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { VersionHistory } from './version-history';
 import { useGitHubCommits } from '@/hooks/use-github';
@@ -55,10 +55,7 @@ export function VersionHistorySidebar({
   return (
     <div className="flex h-full w-80 flex-col border-l bg-background">
       <div className="flex items-center justify-between border-b px-4 py-3">
-        <div className="flex items-center gap-2">
-          <History className="h-4 w-4 text-primary" />
-          <span className="font-semibold text-sm">Version History</span>
-        </div>
+        <span className="font-semibold text-sm">Version History</span>
         <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onClose}>
           <X className="h-3.5 w-3.5" />
         </Button>

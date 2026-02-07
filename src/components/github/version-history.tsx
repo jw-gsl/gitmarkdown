@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { History, RotateCcw, Github, Plus, Minus } from 'lucide-react';
+import { History, RotateCcw, Plus, Minus } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -110,9 +110,17 @@ export function VersionHistory({ commits, loading, onSelectCommit, selectedSha, 
                   <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-muted-foreground">
                     <span className="truncate">{commit.author.login || commit.author.name}</span>
                     <span className="shrink-0">{formatDate(commit.author.date)}</span>
-                    <Badge variant="outline" className="text-[10px] font-mono px-1 py-0 h-4 shrink-0">
-                      {commit.sha.slice(0, 7)}
-                    </Badge>
+                    <a
+                      href={commit.html_url || `https://github.com/${owner}/${repo}/commit/${commit.sha}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={(e) => e.stopPropagation()}
+                      className="shrink-0"
+                    >
+                      <Badge variant="outline" className="text-[10px] font-mono px-1 py-0 h-4 hover:bg-primary hover:text-primary-foreground transition-colors cursor-pointer">
+                        {commit.sha.slice(0, 7)}
+                      </Badge>
+                    </a>
                   </div>
                   {commit.stats && (
                     <div className="mt-0.5 flex items-center gap-2 text-[10px]">
@@ -128,31 +136,19 @@ export function VersionHistory({ commits, loading, onSelectCommit, selectedSha, 
                   )}
                 </div>
 
-                {/* Action icons on hover */}
-                <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+                {/* Restore button on hover */}
+                <div className="flex shrink-0 items-center opacity-0 transition-opacity group-hover:opacity-100">
                   <Button
                     variant="ghost"
-                    size="icon"
-                    className="h-6 w-6"
-                    title="View on GitHub"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      window.open(commit.html_url || `https://github.com/${owner}/${repo}/commit/${commit.sha}`, '_blank');
-                    }}
-                  >
-                    <Github className="h-3 w-3" />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-6 w-6"
-                    title="Restore this version"
+                    size="sm"
+                    className="h-6 px-2 text-[10px] gap-1"
                     onClick={(e) => {
                       e.stopPropagation();
                       setRestoreTarget({ sha: commit.sha, message: commit.message.split('\n')[0] });
                     }}
                   >
                     <RotateCcw className="h-3 w-3" />
+                    Restore
                   </Button>
                 </div>
               </div>

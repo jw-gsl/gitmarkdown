@@ -79,6 +79,27 @@ export interface GitHubPullRequest {
   updated_at: string;
 }
 
+export interface GitHubReviewComment {
+  id: number;
+  body: string;
+  path: string;
+  line: number | null;
+  start_line: number | null;
+  user: { login: string; avatar_url: string; id: number } | null;
+  in_reply_to_id?: number;
+  diff_hunk: string;
+  created_at: string;
+  updated_at: string;
+  html_url: string;
+}
+
+export interface ActivePR {
+  number: number;
+  headSha: string;
+  baseRef: string;
+  htmlUrl: string;
+}
+
 // Workspace types
 export interface Workspace {
   id: string;
@@ -139,7 +160,9 @@ export interface Comment {
   reactions: Record<string, string[]>; // emoji -> uid[]
   parentCommentId: string | null;
   githubCommentId: string | null;
+  githubThreadId?: string | null;
   status: 'active' | 'resolved';
+  branch?: string;
   suggestion?: {
     originalText: string;
     suggestedText: string;

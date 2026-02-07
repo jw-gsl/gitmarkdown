@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
-import { useParams } from 'next/navigation';
+import { useParams, useSearchParams } from 'next/navigation';
 import { MessageSquare, X, Send } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { TiptapEditor } from '@/components/editor/tiptap-editor';
@@ -9,7 +9,7 @@ import { EditorHeader } from '@/components/editor/editor-header';
 import { CommentSidebar } from '@/components/comments/comment-sidebar';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
-import { useGitHubContent, useGitHubBranches, useGitHubPulls } from '@/hooks/use-github';
+import { useGitHubContent, useGitHubBranches, useGitHubPulls, useGitHubCollaborators, useGitHubReviewComments } from '@/hooks/use-github';
 import { useFileStore } from '@/stores/file-store';
 import { useSyncStore } from '@/stores/sync-store';
 import { useSettingsStore } from '@/stores/settings-store';
@@ -24,7 +24,9 @@ import {
   updateFileComment,
   deleteFileComment,
 } from '@/lib/firebase/firestore';
+import { MentionDropdown, type MentionUser } from '@/components/comments/mention-dropdown';
 import type { Comment } from '@/types';
+import { findAnchorInMarkdown, emojiToGitHubReaction } from '@/lib/github/position-mapping';
 
 /**
  * Lightweight glob matching for file patterns like "**\/*.md" or "*.tsx".
@@ -55,6 +57,7 @@ interface PendingComment {
 
 export default function FileEditorPage() {
   const params = useParams();
+  const searchParams = useSearchParams();
   const owner = params.owner as string;
   const repo = params.repo as string;
   const pathSegments = params.path as string[];
@@ -62,9 +65,16 @@ export default function FileEditorPage() {
 
   const { loading, fetchContent, updateContent } = useGitHubContent();
   const { fetchBranches, createBranch } = useGitHubBranches();
-  const { createPR } = useGitHubPulls();
+  const { createPR, fetchPRForBranch } = useGitHubPulls();
+  const { collaborators, fetchCollaborators } = useGitHubCollaborators();
+  const {
+    createComment: createGHComment,
+    replyToComment: replyToGHComment,
+    updateComment: updateGHComment,
+    deleteComment: deleteGHComment,
+  } = useGitHubReviewComments();
   const { setCurrentFile, currentFile, markDirty, markClean, syncStatus } = useFileStore();
-  const { currentBranch, autoBranchName, setAutoBranchName, setCurrentBranch, setBranches } = useSyncStore();
+  const { currentBranch, autoBranchName, setAutoBranchName, setCurrentBranch, setBranches, activePR, setActivePR, clearActivePR } = useSyncStore();
   const {
     autoCommitDelay,
     saveStrategy,
@@ -100,11 +110,25 @@ export default function FileEditorPage() {
   const skipBranchRefetch = useRef(false);
 
   // Comment state – persisted in Firestore
-  const [comments, setComments] = useState<Comment[]>([]);
+  // rawComments holds everything from Firestore; `comments` is filtered by branch
+  const [rawComments, setRawComments] = useState<Comment[]>([]);
+  const comments = useMemo(
+    () => rawComments.filter((c) => !c.branch || c.branch === currentBranch),
+    [rawComments, currentBranch]
+  );
   const [pendingComment, setPendingComment] = useState<PendingComment | null>(null);
   const [commentInputValue, setCommentInputValue] = useState('');
   const [activeCommentId, setActiveCommentId] = useState<string | null>(null);
   const commentInputRef = useRef<HTMLTextAreaElement>(null);
+
+  const [commentInputTop, setCommentInputTop] = useState<number>(80);
+  const [inlineMentionOpen, setInlineMentionOpen] = useState(false);
+  const [inlineMentionQuery, setInlineMentionQuery] = useState('');
+  const [inlineMentionStart, setInlineMentionStart] = useState(-1);
+  const deepLinkHandled = useRef(false);
+
+  // Track firestoreDocId → githubCommentId immediately on creation (bypasses Firestore round-trip)
+  const ghCommentIdMap = useRef(new Map<string, string>());
 
   const editorContainerRef = useRef<HTMLDivElement>(null);
   const autoCommitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -112,6 +136,17 @@ export default function FileEditorPage() {
   const autoPRCreated = useRef(false);
   const contentRef = useRef(content);
   const shaRef = useRef(sha);
+
+  /** Get the GitHub comment ID for a Firestore comment, checking both local state and the immediate map */
+  const getGHCommentId = useCallback((commentId: string): number | null => {
+    // First check immediate map (for recently created comments)
+    const mapped = ghCommentIdMap.current.get(commentId);
+    if (mapped) return parseInt(mapped, 10);
+    // Then check Firestore-synced state
+    const comment = comments.find((c) => c.id === commentId);
+    if (comment?.githubCommentId) return parseInt(comment.githubCommentId, 10);
+    return null;
+  }, [comments]);
 
   // Keep refs in sync with latest state
   useEffect(() => {
@@ -212,11 +247,16 @@ export default function FileEditorPage() {
       markClean(filePath);
       setAutoSaveStatus('saved');
 
+      // Update activePR headSha so subsequent GitHub review comment calls use the latest commit
+      if (activePR && result.commitSha) {
+        setActivePR({ ...activePR, headSha: result.commitSha });
+      }
+
       // Auto-create PR after first commit to auto-branch
       if (isFirstCommitToAutoBranch && autoCreatePR && !autoPRCreated.current) {
         autoPRCreated.current = true;
         try {
-          await createPR(
+          const prResult = await createPR(
             owner,
             repo,
             autoCreatePRTitle || `Auto-save changes from GitMarkdown`,
@@ -225,6 +265,15 @@ export default function FileEditorPage() {
             baseBranch
           );
           toast.success('Pull request created');
+          // Set activePR so comment sync works immediately
+          if (prResult?.number) {
+            setActivePR({
+              number: prResult.number,
+              headSha: result.commitSha || result.sha,
+              baseRef: baseBranch,
+              htmlUrl: prResult.html_url || '',
+            });
+          }
         } catch {
           toast.error('Failed to create pull request');
           autoPRCreated.current = false;
@@ -241,7 +290,7 @@ export default function FileEditorPage() {
     } finally {
       setSaving(false);
     }
-  }, [owner, repo, filePath, currentBranch, updateContent, markClean, saveStrategy, autoBranchName, autoBranchPrefix, autoCreatePR, autoCreatePRTitle, fetchBranches, createBranch, createPR, setAutoBranchName, setCurrentBranch, setBranches]);
+  }, [owner, repo, filePath, currentBranch, updateContent, markClean, saveStrategy, autoBranchName, autoBranchPrefix, autoCreatePR, autoCreatePRTitle, fetchBranches, createBranch, createPR, setAutoBranchName, setCurrentBranch, setBranches, activePR, setActivePR]);
 
   const handleContentChange = useCallback(
     (newContent: string) => {
@@ -273,6 +322,18 @@ export default function FileEditorPage() {
     (data: { text: string; from: number; to: number }) => {
       setPendingComment(data);
       setCommentInputValue('');
+
+      // Calculate vertical position relative to editor container
+      const selection = window.getSelection();
+      if (selection && selection.rangeCount > 0 && editorContainerRef.current) {
+        const range = selection.getRangeAt(0);
+        const rect = range.getBoundingClientRect();
+        const containerRect = editorContainerRef.current.getBoundingClientRect();
+        const scrollTop = editorContainerRef.current.scrollTop;
+        const top = rect.top - containerRect.top + scrollTop;
+        setCommentInputTop(Math.max(16, top));
+      }
+
       // Focus the input after render
       setTimeout(() => {
         commentInputRef.current?.focus();
@@ -301,7 +362,7 @@ export default function FileEditorPage() {
   const handleSubmitComment = useCallback(
     async (commentContent: string, type: 'comment' | 'suggestion' = 'comment', anchorText?: string) => {
       try {
-        await addFileComment(owner, repo, filePath, {
+        const docRef = await addFileComment(owner, repo, filePath, {
           fileId: sha || filePath,
           author: {
             uid: user?.uid ?? 'anonymous',
@@ -318,7 +379,25 @@ export default function FileEditorPage() {
           parentCommentId: null,
           githubCommentId: null,
           status: 'active',
+          branch: currentBranch,
         });
+
+        // Outbound sync: push to GitHub PR (fire-and-forget)
+        if (activePR && contentRef.current) {
+          const anchor = anchorText ?? pendingComment?.text ?? '';
+          const lineInfo = findAnchorInMarkdown(contentRef.current, anchor, pendingComment?.from);
+          const line = lineInfo?.line || 1;
+          createGHComment(
+            owner, repo, activePR.number, commentContent,
+            activePR.headSha, filePath, line, lineInfo?.startLine
+          ).then((ghComment) => {
+            const ghId = ghComment.id.toString();
+            ghCommentIdMap.current.set(docRef.id, ghId);
+            updateFileComment(docRef.id, { githubCommentId: ghId }).catch(() => {});
+          }).catch(() => {
+            // Silent — outbound sync is fire-and-forget
+          });
+        }
       } catch {
         toast.error('Failed to add comment');
       }
@@ -326,7 +405,7 @@ export default function FileEditorPage() {
       setCommentInputValue('');
       setCommentSidebarOpen(true);
     },
-    [pendingComment, sha, filePath, owner, repo, user]
+    [pendingComment, sha, filePath, owner, repo, user, currentBranch, activePR, createGHComment]
   );
 
   const handleInlineCommentSubmit = useCallback(() => {
@@ -338,7 +417,7 @@ export default function FileEditorPage() {
     async (parentId: string, replyContent: string) => {
       const parentComment = comments.find((c) => c.id === parentId);
       try {
-        await addFileComment(owner, repo, filePath, {
+        const docRef = await addFileComment(owner, repo, filePath, {
           fileId: sha || filePath,
           author: {
             uid: user?.uid ?? 'anonymous',
@@ -355,21 +434,74 @@ export default function FileEditorPage() {
           parentCommentId: parentId,
           githubCommentId: null,
           status: 'active',
+          branch: currentBranch,
         });
+
+        // Outbound sync: reply on GitHub if parent has githubCommentId
+        const parentGHId = getGHCommentId(parentId);
+        if (activePR && parentGHId) {
+          replyToGHComment(
+            owner, repo, activePR.number,
+            parentGHId,
+            replyContent
+          ).then((ghComment) => {
+            const ghId = ghComment.id.toString();
+            ghCommentIdMap.current.set(docRef.id, ghId);
+            updateFileComment(docRef.id, { githubCommentId: ghId }).catch(() => {});
+          }).catch(() => {});
+        }
       } catch {
         toast.error('Failed to add reply');
       }
     },
-    [comments, sha, filePath, owner, repo, user]
+    [comments, sha, filePath, owner, repo, user, currentBranch, activePR, replyToGHComment, getGHCommentId]
   );
 
   const handleResolveComment = useCallback(async (commentId: string) => {
     try {
       await updateFileComment(commentId, { status: 'resolved' });
+
+      // Outbound sync: resolve thread on GitHub via GraphQL
+      const comment = comments.find((c) => c.id === commentId);
+      if (activePR && comment?.githubThreadId && user) {
+        user.getIdToken().then((idToken) => {
+          fetch('/api/github/review-comments', {
+            method: 'PATCH',
+            headers: {
+              Authorization: `Bearer ${idToken}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ threadId: comment.githubThreadId, action: 'resolve' }),
+          }).catch(() => {});
+        }).catch(() => {});
+      }
     } catch {
       toast.error('Failed to resolve comment');
     }
-  }, []);
+  }, [comments, activePR, user]);
+
+  const handleReopenComment = useCallback(async (commentId: string) => {
+    try {
+      await updateFileComment(commentId, { status: 'active' });
+
+      // Outbound sync: unresolve thread on GitHub via GraphQL
+      const comment = comments.find((c) => c.id === commentId);
+      if (activePR && comment?.githubThreadId && user) {
+        user.getIdToken().then((idToken) => {
+          fetch('/api/github/review-comments', {
+            method: 'PATCH',
+            headers: {
+              Authorization: `Bearer ${idToken}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ threadId: comment.githubThreadId, action: 'unresolve' }),
+          }).catch(() => {});
+        }).catch(() => {});
+      }
+    } catch {
+      toast.error('Failed to reopen comment');
+    }
+  }, [comments, activePR, user]);
 
   const handleAddReaction = useCallback(
     async (commentId: string, emoji: string) => {
@@ -377,42 +509,98 @@ export default function FileEditorPage() {
       if (!comment) return;
       const uid = user?.uid ?? 'anonymous';
       const existing = comment.reactions[emoji] || [];
-      const updatedUsers = existing.includes(uid)
+      const isRemoving = existing.includes(uid);
+      const updatedUsers = isRemoving
         ? existing.filter((u) => u !== uid)
         : [...existing, uid];
+
+      // Clean up: remove empty reaction arrays instead of leaving them with 0
+      const newReactions = { ...comment.reactions };
+      if (updatedUsers.length === 0) {
+        delete newReactions[emoji];
+      } else {
+        newReactions[emoji] = updatedUsers;
+      }
+
       try {
-        await updateFileComment(commentId, {
-          reactions: { ...comment.reactions, [emoji]: updatedUsers },
-        });
+        await updateFileComment(commentId, { reactions: newReactions });
+
+        // Outbound sync: add or remove reaction on GitHub
+        const ghId = getGHCommentId(commentId);
+        const ghReaction = emojiToGitHubReaction(emoji);
+        if (activePR && ghId && ghReaction && user) {
+          user.getIdToken().then((idToken) => {
+            fetch('/api/github/review-comments', {
+              method: 'POST',
+              headers: {
+                Authorization: `Bearer ${idToken}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                owner,
+                repo,
+                reaction: ghReaction,
+                commentId: ghId,
+                ...(isRemoving ? { removeReaction: owner } : {}),
+              }),
+            }).catch(() => {});
+          }).catch(() => {});
+        }
       } catch {
         toast.error('Failed to update reaction');
       }
     },
-    [comments, user]
+    [comments, user, activePR, owner, repo, getGHCommentId]
   );
 
   const handleEditComment = useCallback(async (commentId: string, newContent: string) => {
     try {
       await updateFileComment(commentId, { content: newContent });
+
+      // Outbound sync: update on GitHub
+      const ghId = getGHCommentId(commentId);
+      if (activePR && ghId) {
+        updateGHComment(
+          owner, repo,
+          ghId,
+          newContent
+        ).catch(() => {});
+      }
     } catch {
       toast.error('Failed to edit comment');
     }
-  }, []);
+  }, [activePR, owner, repo, updateGHComment, getGHCommentId]);
 
   const handleDeleteComment = useCallback(async (commentId: string) => {
+    // Get GitHub ID before deleting locally
+    const ghId = getGHCommentId(commentId);
     try {
       await deleteFileComment(commentId);
       toast.success('Comment deleted');
+
+      // Outbound sync: delete on GitHub
+      if (activePR && ghId) {
+        deleteGHComment(
+          owner, repo,
+          ghId
+        ).catch(() => {});
+      }
     } catch {
       toast.error('Failed to delete comment');
     }
-  }, []);
+  }, [activePR, owner, repo, deleteGHComment, getGHCommentId]);
 
   const handleHighlightClick = useCallback(
     (data: { text: string; from: number; to: number }) => {
-      // Find the comment matching this highlighted text by anchorText
+      // Find the comment matching this highlighted text by anchorText (flexible matching)
       const match = comments.find(
-        (c) => !c.parentCommentId && c.anchorText === data.text
+        (c) =>
+          !c.parentCommentId &&
+          c.status === 'active' &&
+          c.anchorText &&
+          (c.anchorText === data.text ||
+            data.text.includes(c.anchorText) ||
+            c.anchorText.includes(data.text))
       );
       if (match) {
         setActiveCommentId(match.id);
@@ -426,29 +614,26 @@ export default function FileEditorPage() {
     (commentId: string | null) => {
       setActiveCommentId(commentId);
 
-      // Scroll the editor to show the highlighted anchor text
+      // Scroll the editor to show the highlighted anchor text.
+      // Wait for the editor effect to apply comment-active class, then scroll to it.
       if (commentId) {
-        const comment = comments.find((c) => c.id === commentId);
-        if (comment?.anchorText) {
-          requestAnimationFrame(() => {
-            const marks = document.querySelectorAll('mark[data-color="#FEF9C3"]');
-            for (const mark of marks) {
-              if (mark.textContent?.includes(comment.anchorText)) {
-                mark.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-                break;
-              }
-            }
-          });
-        }
+        setTimeout(() => {
+          const container = editorContainerRef.current;
+          if (!container) return;
+          const activeMark = container.querySelector('mark.comment-active');
+          if (activeMark) {
+            activeMark.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          }
+        }, 80);
       }
     },
-    [comments]
+    []
   );
 
   const handleSidebarAddComment = useCallback(
     async (commentContent: string, type: 'comment' | 'suggestion', anchorText?: string) => {
       try {
-        await addFileComment(owner, repo, filePath, {
+        const docRef = await addFileComment(owner, repo, filePath, {
           fileId: sha || filePath,
           author: {
             uid: user?.uid ?? 'anonymous',
@@ -465,12 +650,27 @@ export default function FileEditorPage() {
           parentCommentId: null,
           githubCommentId: null,
           status: 'active',
+          branch: currentBranch,
         });
+
+        // Outbound sync: push to GitHub PR (fire-and-forget)
+        if (activePR && contentRef.current && anchorText) {
+          const lineInfo = findAnchorInMarkdown(contentRef.current, anchorText);
+          const line = lineInfo?.line || 1;
+          createGHComment(
+            owner, repo, activePR.number, commentContent,
+            activePR.headSha, filePath, line, lineInfo?.startLine
+          ).then((ghComment) => {
+            const ghId = ghComment.id.toString();
+            ghCommentIdMap.current.set(docRef.id, ghId);
+            updateFileComment(docRef.id, { githubCommentId: ghId }).catch(() => {});
+          }).catch(() => {});
+        }
       } catch {
         toast.error('Failed to add comment');
       }
     },
-    [sha, filePath, owner, repo, user]
+    [sha, filePath, owner, repo, user, currentBranch, activePR, createGHComment]
   );
 
   // Clean up timers on unmount
@@ -520,11 +720,130 @@ export default function FileEditorPage() {
       repo,
       filePath,
       (firestoreComments) => {
-        setComments(firestoreComments);
+        setRawComments(firestoreComments);
       }
     );
     return () => unsubscribe();
   }, [owner, repo, filePath]);
+
+  // Clear active comment selection when branch changes (comment may not exist on new branch)
+  const prevBranch = useRef(currentBranch);
+  useEffect(() => {
+    if (prevBranch.current !== currentBranch) {
+      setActiveCommentId(null);
+      prevBranch.current = currentBranch;
+    }
+  }, [currentBranch]);
+
+  // Auto-resolve orphaned comments whose anchor text no longer exists in the document
+  const orphanCheckKey = useRef('');
+  useEffect(() => {
+    const key = `${filePath}:${currentBranch}`;
+    if (orphanCheckKey.current === key || fileLoading || !content || !comments.length) return;
+    orphanCheckKey.current = key;
+
+    const activeRoots = comments.filter(
+      (c) => !c.parentCommentId && c.status === 'active' && c.anchorText
+    );
+    for (const c of activeRoots) {
+      if (!content.includes(c.anchorText)) {
+        updateFileComment(c.id, { status: 'resolved' }).catch(() => {});
+      }
+    }
+  }, [content, comments, fileLoading, filePath, currentBranch]);
+
+  // Fetch repo collaborators for @ mentions
+  useEffect(() => {
+    fetchCollaborators(owner, repo);
+  }, [owner, repo, fetchCollaborators]);
+
+  // PR detection: check if current branch has an open PR
+  const prDetected = useRef(false);
+  useEffect(() => {
+    prDetected.current = false;
+    clearActivePR();
+
+    const detectPR = async () => {
+      try {
+        const pr = await fetchPRForBranch(owner, repo, currentBranch);
+        if (pr) {
+          setActivePR(pr);
+          prDetected.current = true;
+        }
+      } catch {
+        // Silent — PR detection is best-effort
+      }
+    };
+    detectPR();
+  }, [owner, repo, currentBranch, fetchPRForBranch, setActivePR, clearActivePR]);
+
+  // Inbound sync: pull GitHub PR review comments periodically
+  const lastInboundSync = useRef<string | null>(null);
+  const inboundSyncInFlight = useRef(false);
+
+  const runInboundSync = useCallback(async () => {
+    if (!activePR || !user || inboundSyncInFlight.current) return;
+    inboundSyncInFlight.current = true;
+    try {
+      const idToken = await user.getIdToken();
+      await fetch('/api/comments/sync', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${idToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          owner,
+          repo,
+          pullNumber: activePR.number,
+          filePath,
+          direction: 'from-github',
+        }),
+      });
+    } catch {
+      // Silent — inbound sync is best-effort
+    } finally {
+      inboundSyncInFlight.current = false;
+    }
+  }, [activePR, user, owner, repo, filePath]);
+
+  // Initial sync when PR is first detected
+  useEffect(() => {
+    if (!activePR) return;
+    const syncKey = `${activePR.number}:${filePath}`;
+    if (lastInboundSync.current === syncKey) return;
+    lastInboundSync.current = syncKey;
+    runInboundSync();
+  }, [activePR, filePath, runInboundSync]);
+
+  // Re-sync on window focus (user may have been on GitHub tab)
+  useEffect(() => {
+    if (!activePR) return;
+    const handleFocus = () => runInboundSync();
+    window.addEventListener('focus', handleFocus);
+    return () => window.removeEventListener('focus', handleFocus);
+  }, [activePR, runInboundSync]);
+
+  // Periodic re-sync every 30 seconds
+  useEffect(() => {
+    if (!activePR) return;
+    const interval = setInterval(runInboundSync, 30_000);
+    return () => clearInterval(interval);
+  }, [activePR, runInboundSync]);
+
+  // Deep link: open comment from ?comment= URL param
+  useEffect(() => {
+    if (deepLinkHandled.current) return;
+    const commentId = searchParams.get('comment');
+    if (commentId && comments.length > 0) {
+      const exists = comments.find((c) => c.id === commentId);
+      if (exists) {
+        setActiveCommentId(commentId);
+        setCommentSidebarOpen(true);
+        deepLinkHandled.current = true;
+      }
+    }
+  }, [searchParams, comments, setCommentSidebarOpen]);
 
   // Keyboard shortcut for save (Cmd+S / Ctrl+S)
   useEffect(() => {
@@ -575,6 +894,13 @@ export default function FileEditorPage() {
     [comments]
   );
 
+  // Active comment's anchor text for orange highlight in editor
+  const activeAnchorText = useMemo(() => {
+    if (!activeCommentId) return null;
+    const comment = comments.find((c) => c.id === activeCommentId);
+    return comment?.anchorText || null;
+  }, [activeCommentId, comments]);
+
   // Sync comment count to UI store for the header badge
   useEffect(() => {
     setActiveCommentCount(activeCommentCount);
@@ -596,15 +922,17 @@ export default function FileEditorPage() {
             <>
               {isMarkdown ? (
                 fileLoading ? (
-                  <div className="flex-1 overflow-auto p-8">
-                    <div className="mx-auto max-w-3xl space-y-4">
-                      <div className="h-6 w-3/4 animate-pulse rounded bg-muted" />
-                      <div className="h-4 w-full animate-pulse rounded bg-muted" />
-                      <div className="h-4 w-5/6 animate-pulse rounded bg-muted" />
-                      <div className="h-4 w-2/3 animate-pulse rounded bg-muted" />
-                      <div className="mt-6 h-4 w-full animate-pulse rounded bg-muted" />
-                      <div className="h-4 w-4/5 animate-pulse rounded bg-muted" />
-                      <div className="h-4 w-3/4 animate-pulse rounded bg-muted" />
+                  <div className="min-h-full bg-accent/40 dark:bg-neutral-950">
+                    <div className="mx-auto max-w-3xl min-h-[calc(100vh-8rem)] bg-background editor-page rounded-lg px-16 py-10">
+                      <div className="space-y-4">
+                        <div className="h-6 w-3/4 animate-pulse rounded bg-muted" />
+                        <div className="h-4 w-full animate-pulse rounded bg-muted" />
+                        <div className="h-4 w-5/6 animate-pulse rounded bg-muted" />
+                        <div className="h-4 w-2/3 animate-pulse rounded bg-muted" />
+                        <div className="mt-6 h-4 w-full animate-pulse rounded bg-muted" />
+                        <div className="h-4 w-4/5 animate-pulse rounded bg-muted" />
+                        <div className="h-4 w-3/4 animate-pulse rounded bg-muted" />
+                      </div>
                     </div>
                   </div>
                 ) : (
@@ -616,7 +944,7 @@ export default function FileEditorPage() {
                     onHighlightClick={handleHighlightClick}
                     pendingComment={pendingComment}
                     commentAnchors={commentAnchors}
-                    className="flex-1 overflow-auto"
+                    activeAnchorText={activeAnchorText}
                   />
                 )
               ) : (
@@ -637,9 +965,12 @@ export default function FileEditorPage() {
             </>
           )}
 
-          {/* Floating inline comment input */}
+          {/* Floating inline comment input – positioned next to selected text */}
           {pendingComment && (
-            <div className="absolute right-4 top-20 z-50 w-72 rounded-lg border bg-background p-3 shadow-xl">
+            <div
+              className="absolute right-4 z-50 w-72 rounded-lg border bg-background p-3 shadow-xl"
+              style={{ top: commentInputTop }}
+            >
               <div className="mb-2 flex items-center gap-2">
                 <Avatar className="h-5 w-5 shrink-0">
                   <AvatarImage src={user?.photoURL || ''} />
@@ -649,23 +980,72 @@ export default function FileEditorPage() {
                 </Avatar>
                 <span className="text-xs font-medium truncate">{user?.displayName || 'You'}</span>
               </div>
-              <Textarea
-                ref={commentInputRef}
-                value={commentInputValue}
-                onChange={(e) => setCommentInputValue(e.target.value)}
-                placeholder="Comment or add others with @"
-                className="min-h-[60px] resize-none text-sm"
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                    e.preventDefault();
-                    handleInlineCommentSubmit();
-                  }
-                  if (e.key === 'Escape') {
-                    setPendingComment(null);
-                    setCommentInputValue('');
-                  }
-                }}
-              />
+              <div className="relative">
+                <Textarea
+                  ref={commentInputRef}
+                  value={commentInputValue}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setCommentInputValue(val);
+                    const cursorPos = e.target.selectionStart;
+                    const textUpToCursor = val.slice(0, cursorPos);
+                    const atMatch = textUpToCursor.match(/@(\w*)$/);
+                    if (atMatch && collaborators.length > 0) {
+                      setInlineMentionOpen(true);
+                      setInlineMentionQuery(atMatch[1]);
+                      setInlineMentionStart(cursorPos - atMatch[0].length);
+                    } else {
+                      setInlineMentionOpen(false);
+                    }
+                  }}
+                  placeholder="Comment or add others with @"
+                  className="min-h-[60px] resize-none text-sm"
+                  onKeyDown={(e) => {
+                    if (inlineMentionOpen && (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'Enter' || e.key === 'Tab')) {
+                      return;
+                    }
+                    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                      e.preventDefault();
+                      handleInlineCommentSubmit();
+                    }
+                    if (e.key === 'Escape') {
+                      if (inlineMentionOpen) {
+                        setInlineMentionOpen(false);
+                      } else {
+                        setPendingComment(null);
+                        setCommentInputValue('');
+                      }
+                    }
+                  }}
+                  onBlur={() => {
+                    setTimeout(() => setInlineMentionOpen(false), 150);
+                  }}
+                />
+                {inlineMentionOpen && (
+                  <MentionDropdown
+                    users={collaborators}
+                    query={inlineMentionQuery}
+                    visible={inlineMentionOpen}
+                    position={{ top: 4, left: 0 }}
+                    onSelect={(user) => {
+                      const before = commentInputValue.slice(0, inlineMentionStart);
+                      const after = commentInputValue.slice(inlineMentionStart + 1 + inlineMentionQuery.length);
+                      const newVal = `${before}@${user.login} ${after}`;
+                      setCommentInputValue(newVal);
+                      setInlineMentionOpen(false);
+                      setTimeout(() => {
+                        const textarea = commentInputRef.current;
+                        if (textarea) {
+                          textarea.focus();
+                          const pos = before.length + user.login.length + 2;
+                          textarea.setSelectionRange(pos, pos);
+                        }
+                      }, 0);
+                    }}
+                    onClose={() => setInlineMentionOpen(false)}
+                  />
+                )}
+              </div>
               <div className="mt-2 flex justify-end gap-2">
                 <Button
                   variant="ghost"
@@ -700,11 +1080,14 @@ export default function FileEditorPage() {
           onAddComment={handleSidebarAddComment}
           onReplyToComment={handleReplyToComment}
           onResolveComment={handleResolveComment}
+          onReopenComment={handleReopenComment}
           onAddReaction={handleAddReaction}
           onEditComment={handleEditComment}
           onDeleteComment={handleDeleteComment}
           activeCommentId={activeCommentId}
           onSelectComment={handleSelectComment}
+          currentUserId={user?.uid}
+          mentionUsers={collaborators}
         />
       </div>
     </div>

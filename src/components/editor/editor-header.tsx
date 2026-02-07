@@ -13,8 +13,8 @@ export function EditorHeader({
   isDirty,
   autoSaveStatus,
 }: EditorHeaderProps) {
-  // Only show the bar when there's an auto-save status to display
-  if (autoSaveStatus === 'idle') return null;
+  // Only show the bar when saving or just saved (errors are shown via toast)
+  if (autoSaveStatus === 'idle' || autoSaveStatus === 'error') return null;
 
   return (
     <div className="flex items-center justify-end border-b px-4 py-1.5 gap-3">
@@ -30,9 +30,6 @@ export function EditorHeader({
             <Check className="h-3 w-3 text-green-500" />
             <span className="text-green-600 dark:text-green-400">Auto-saved</span>
           </>
-        )}
-        {autoSaveStatus === 'error' && (
-          <span className="text-destructive">Save failed</span>
         )}
       </span>
     </div>

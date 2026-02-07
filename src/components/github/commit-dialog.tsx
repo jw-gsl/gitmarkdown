@@ -85,41 +85,20 @@ export function CommitDialog({
   const handleGenerateAI = useCallback(async () => {
     setGenerating(true);
     try {
-      const res = await fetch('/api/ai/chat', {
+      const res = await fetch('/api/ai/commit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          messages: [
-            {
-              role: 'user',
-              content: `Generate a concise git commit message (title on first line, then blank line, then 1-2 sentence description) for changes to these files: ${changedFiles.join(', ')}. Only output the commit message, nothing else.`,
-            },
-          ],
+          changedFiles,
           provider: useSettingsStore.getState().aiProvider,
           modelId: useSettingsStore.getState().aiModel,
         }),
       });
 
       if (res.ok) {
-        const text = await res.text();
-        // Parse the streaming response - extract text content
-        const lines = text.split('\n').filter(Boolean);
-        let fullText = '';
-        for (const line of lines) {
-          // AI SDK streams data as formatted events
-          if (line.startsWith('0:')) {
-            try {
-              fullText += JSON.parse(line.slice(2));
-            } catch {
-              // skip unparseable lines
-            }
-          }
-        }
-        if (fullText) {
-          const parts = fullText.split('\n\n');
-          setMessage(parts[0]?.trim() || '');
-          setDescription(parts.slice(1).join('\n\n').trim());
-        }
+        const data = await res.json();
+        if (data.message) setMessage(data.message);
+        if (data.description) setDescription(data.description);
       }
     } catch {
       // Silently fail - user can type manually

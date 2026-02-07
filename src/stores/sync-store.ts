@@ -1,5 +1,11 @@
 import { create } from 'zustand';
-import type { SyncStatus } from '@/types';
+import type { SyncStatus, ActivePR } from '@/types';
+
+/** Read the branch from the URL search params on initial load */
+function getInitialBranch(): string {
+  if (typeof window === 'undefined') return 'main';
+  return new URLSearchParams(window.location.search).get('branch') || 'main';
+}
 
 interface SyncStoreState {
   currentBranch: string;
@@ -10,6 +16,7 @@ interface SyncStoreState {
   syncStatus: SyncStatus;
   syncError: string | null;
   isSyncing: boolean;
+  activePR: ActivePR | null;
 
   setCurrentBranch: (branch: string) => void;
   setBaseBranch: (branch: string) => void;
@@ -22,10 +29,12 @@ interface SyncStoreState {
   startSync: () => void;
   finishSync: (sha: string) => void;
   failSync: (error: string) => void;
+  setActivePR: (pr: ActivePR | null) => void;
+  clearActivePR: () => void;
 }
 
 export const useSyncStore = create<SyncStoreState>((set) => ({
-  currentBranch: 'main',
+  currentBranch: getInitialBranch(),
   baseBranch: 'main',
   autoBranchName: null,
   branches: [],
@@ -33,6 +42,7 @@ export const useSyncStore = create<SyncStoreState>((set) => ({
   syncStatus: 'synced',
   syncError: null,
   isSyncing: false,
+  activePR: null,
 
   setCurrentBranch: (branch) => set({ currentBranch: branch }),
   setBaseBranch: (branch) => set({ baseBranch: branch }),
@@ -54,4 +64,6 @@ export const useSyncStore = create<SyncStoreState>((set) => ({
     syncStatus: 'error',
     syncError: error
   }),
+  setActivePR: (pr) => set({ activePR: pr }),
+  clearActivePR: () => set({ activePR: null }),
 }));

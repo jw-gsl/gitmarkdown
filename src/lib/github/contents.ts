@@ -79,3 +79,25 @@ export async function createFile(
     commitSha: data.commit.sha || '',
   };
 }
+
+export async function deleteFile(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  path: string,
+  sha: string,
+  message: string,
+  branch?: string
+): Promise<{ commitSha: string }> {
+  const { data } = await octokit.repos.deleteFile({
+    owner,
+    repo,
+    path,
+    message,
+    sha,
+    branch,
+  });
+  return {
+    commitSha: data.commit.sha || '',
+  };
+}

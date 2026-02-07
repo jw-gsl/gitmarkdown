@@ -5,6 +5,50 @@ import type { AIProvider } from '@/types';
 export type SaveStrategy = 'main' | 'branch';
 export type CommitValidationLevel = 'none' | 'warning' | 'error';
 
+export interface AIPersona {
+  id: string;
+  name: string;
+  description: string;
+  instructions: string;
+  avatar: string; // emoji
+  isDefault?: boolean;
+}
+
+export const DEFAULT_PERSONAS: AIPersona[] = [
+  {
+    id: 'default',
+    name: 'GitMarkdown',
+    description: 'Balanced and helpful.',
+    instructions: '',
+    avatar: '✦',
+    isDefault: true,
+  },
+  {
+    id: 'editor',
+    name: 'Editor',
+    description: 'Precise, clear, and concise.',
+    instructions: 'Focus on clarity, grammar, and conciseness. Be direct. Prefer shorter sentences. Remove filler words.',
+    avatar: '✏️',
+    isDefault: true,
+  },
+  {
+    id: 'creative',
+    name: 'Creative',
+    description: 'Imaginative and expressive.',
+    instructions: 'Be creative and expressive. Use vivid language, metaphors, and varied sentence structures. Encourage bold ideas.',
+    avatar: '🎨',
+    isDefault: true,
+  },
+  {
+    id: 'technical',
+    name: 'Technical',
+    description: 'Detailed and structured.',
+    instructions: 'Focus on technical accuracy and structure. Use precise terminology. Include code examples when relevant. Be thorough.',
+    avatar: '⚙️',
+    isDefault: true,
+  },
+];
+
 interface SettingsStoreState {
   theme: 'light' | 'dark' | 'system';
   aiProvider: AIProvider;
@@ -23,6 +67,7 @@ interface SettingsStoreState {
   autoCreatePR: boolean;
   autoCreatePRTitle: string;
   commitValidationLevel: CommitValidationLevel;
+  activePersonaId: string;
 
   setTheme: (theme: SettingsStoreState['theme']) => void;
   setAIProvider: (provider: AIProvider) => void;
@@ -41,6 +86,7 @@ interface SettingsStoreState {
   setAutoCreatePR: (enabled: boolean) => void;
   setAutoCreatePRTitle: (title: string) => void;
   setCommitValidationLevel: (level: CommitValidationLevel) => void;
+  setActivePersonaId: (id: string) => void;
 }
 
 export const useSettingsStore = create<SettingsStoreState>()(
@@ -63,6 +109,7 @@ export const useSettingsStore = create<SettingsStoreState>()(
       autoCreatePR: false,
       autoCreatePRTitle: 'Auto-save changes from GitMarkdown',
       commitValidationLevel: 'none',
+      activePersonaId: 'default',
 
       setTheme: (theme) => set({ theme }),
       setAIProvider: (provider) => set({ aiProvider: provider }),
@@ -81,6 +128,7 @@ export const useSettingsStore = create<SettingsStoreState>()(
       setAutoCreatePR: (enabled) => set({ autoCreatePR: enabled }),
       setAutoCreatePRTitle: (title) => set({ autoCreatePRTitle: title }),
       setCommitValidationLevel: (level) => set({ commitValidationLevel: level }),
+      setActivePersonaId: (id) => set({ activePersonaId: id }),
     }),
     { name: 'gitmarkdown-settings' }
   )

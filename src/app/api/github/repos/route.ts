@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { adminAuth, adminDb } from '@/lib/firebase/admin';
 import { createOctokitClient } from '@/lib/github/client';
-import { listUserRepos } from '@/lib/github/repos';
+import { listUserRepos, getRepo } from '@/lib/github/repos';
 import { decrypt } from '@/app/api/auth/session/route';
 
 async function getOctokitFromRequest(request: NextRequest) {
@@ -21,6 +21,16 @@ async function getOctokitFromRequest(request: NextRequest) {
 export async function GET(request: NextRequest) {
   try {
     const octokit = await getOctokitFromRequest(request);
+    const { searchParams } = new URL(request.url);
+    const owner = searchParams.get('owner');
+    const repo = searchParams.get('repo');
+
+    // Single repo lookup when owner & repo are provided
+    if (owner && repo) {
+      const repoData = await getRepo(octokit, owner, repo);
+      return NextResponse.json(repoData);
+    }
+
     const repos = await listUserRepos(octokit);
     return NextResponse.json(repos);
   } catch (error: unknown) {

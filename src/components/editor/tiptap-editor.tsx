@@ -25,6 +25,7 @@ interface TiptapEditorProps {
   onHighlightClick?: (data: SelectionData) => void;
   pendingComment?: { from: number; to: number } | null;
   commentAnchors?: string[];
+  activeAnchorText?: string | null;
   editable?: boolean;
   className?: string;
   placeholder?: string;
@@ -38,6 +39,7 @@ export function TiptapEditor({
   onHighlightClick,
   pendingComment,
   commentAnchors,
+  activeAnchorText,
   editable = true,
   className = '',
   placeholder,
@@ -73,14 +75,19 @@ export function TiptapEditor({
     editable,
     editorProps: {
       attributes: {
-        class: 'prose prose-sm dark:prose-invert max-w-none focus:outline-none min-h-[500px] px-4 sm:px-8 py-4 sm:py-6',
+        class: 'prose dark:prose-invert max-w-none focus:outline-none min-h-[500px] px-4 sm:px-8 py-4 sm:py-6',
       },
       handleClick: (view, pos) => {
-        if (pos <= 0 || pos >= view.state.doc.content.size) return false;
+        if (pos < 0 || pos > view.state.doc.content.size) return false;
         try {
           const $pos = view.state.doc.resolve(pos);
-          const marks = $pos.marks();
-          const commentHighlight = marks.find(
+          // Check marks more robustly - nodeAfter, nodeBefore, and stored marks
+          const allMarks = [
+            ...($pos.nodeAfter?.marks ?? []),
+            ...($pos.nodeBefore?.marks ?? []),
+            ...$pos.marks(),
+          ];
+          const commentHighlight = allMarks.find(
             (m) => m.type.name === 'highlight' && m.attrs.color === '#FEF9C3'
           );
           if (commentHighlight && onHighlightClickRef.current) {
@@ -188,6 +195,90 @@ export function TiptapEditor({
       editor.view.dispatch(tr);
     }
   }, [editor, commentAnchors]);
+
+  // Toggle active highlight class on the selected comment's anchor text
+  useEffect(() => {
+    if (!editor) return;
+    const dom = editor.view.dom;
+
+    const applyActiveClass = () => {
+      // Clear all previous active highlights
+      dom.querySelectorAll('mark.comment-active').forEach((el) => {
+        el.classList.remove('comment-active');
+      });
+
+      if (!activeAnchorText) return;
+
+      const highlightType = editor.schema.marks.highlight;
+      if (!highlightType) return;
+
+      // Group consecutive highlighted text nodes from the ProseMirror doc.
+      // This handles anchor text that spans multiple marks (e.g. bold formatting).
+      interface HLSpan { text: string; pos: number; nodeSize: number; }
+      const groups: HLSpan[][] = [];
+      let currentGroup: HLSpan[] = [];
+      let lastEnd = -1;
+
+      editor.state.doc.descendants((node, pos) => {
+        if (!node.isText || !node.text) return;
+
+        const hasHL = node.marks.some(
+          (m) => m.type === highlightType && m.attrs.color === '#FEF9C3'
+        );
+
+        if (hasHL) {
+          if (pos === lastEnd && currentGroup.length > 0) {
+            currentGroup.push({ text: node.text, pos, nodeSize: node.nodeSize });
+          } else {
+            if (currentGroup.length > 0) groups.push(currentGroup);
+            currentGroup = [{ text: node.text, pos, nodeSize: node.nodeSize }];
+          }
+          lastEnd = pos + node.nodeSize;
+        } else {
+          if (currentGroup.length > 0) groups.push(currentGroup);
+          currentGroup = [];
+          lastEnd = -1;
+        }
+      });
+      if (currentGroup.length > 0) groups.push(currentGroup);
+
+      // Find the group whose combined text contains activeAnchorText
+      for (const group of groups) {
+        const combinedText = group.map((s) => s.text).join('');
+        if (!combinedText.includes(activeAnchorText)) continue;
+
+        // Map each ProseMirror text node to its DOM <mark> element
+        for (const span of group) {
+          try {
+            const { node: domNode } = editor.view.domAtPos(span.pos);
+            let el: Node | null = domNode;
+            if (el?.nodeType === Node.TEXT_NODE) el = el.parentElement;
+            while (el && el !== dom) {
+              if (el instanceof HTMLElement && el.tagName === 'MARK') {
+                el.classList.add('comment-active');
+                break;
+              }
+              el = (el as HTMLElement).parentElement;
+            }
+          } catch {
+            // Position may not map to DOM
+          }
+        }
+        break; // Only highlight first matching group
+      }
+    };
+
+    applyActiveClass();
+
+    // Re-apply after editor updates since ProseMirror may recreate DOM nodes
+    editor.on('update', applyActiveClass);
+    return () => {
+      editor.off('update', applyActiveClass);
+      dom.querySelectorAll('mark.comment-active').forEach((el) => {
+        el.classList.remove('comment-active');
+      });
+    };
+  }, [editor, activeAnchorText]);
 
   // Keyboard shortcuts: ⌘E (edit), ⌘J (chat), ⌘⇧M (comment)
   useEffect(() => {
@@ -316,17 +407,19 @@ export function TiptapEditor({
   if (!editor) return null;
 
   return (
-    <div className={`relative ${className}`}>
-      <EditorToolbar editor={editor} />
+    <div className={`relative min-h-full bg-accent/40 dark:bg-neutral-950 ${className}`}>
       <EditorBubbleMenu
         editor={editor}
         onEdit={handleEdit}
         onChat={onChat}
         onComment={onComment}
       />
-      <SlashCommandMenu editor={editor} />
-      <div style={{ fontSize: `${editorFontSize}px`, lineHeight: editorLineHeight }}>
-        <EditorContent editor={editor} />
+      <div className="mx-auto max-w-3xl bg-background editor-page rounded-lg mb-8">
+        <EditorToolbar editor={editor} />
+        <div className="relative" style={{ fontSize: `${editorFontSize}px`, lineHeight: editorLineHeight }}>
+          <EditorContent editor={editor} />
+          <SlashCommandMenu editor={editor} />
+        </div>
       </div>
 
       {/* Inline AI edit panel */}

@@ -5,10 +5,14 @@ import { useRouter } from 'next/navigation';
 import { Loader2 } from 'lucide-react';
 import { AuthProvider, useAuth } from '@/providers/auth-provider';
 import { SidebarProvider } from '@/components/ui/sidebar';
+import { useSettingsSync } from '@/hooks/use-settings-sync';
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
   const router = useRouter();
+
+  // Sync settings between localStorage and Firestore
+  useSettingsSync();
 
   useEffect(() => {
     if (!loading && !user) {
@@ -34,7 +38,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     <AuthProvider>
       <AuthGuard>
         <SidebarProvider>
-          <div className="flex min-h-screen w-full">
+          <div className="flex h-screen w-full overflow-hidden">
             {children}
           </div>
         </SidebarProvider>

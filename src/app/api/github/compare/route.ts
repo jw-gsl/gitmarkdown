@@ -1,0 +1,39 @@
+import { NextRequest, NextResponse } from 'next/server';
+import { adminAuth, adminDb } from '@/lib/firebase/admin';
+import { createOctokitClient } from '@/lib/github/client';
+import { compareBranches } from '@/lib/github/compare';
+import { decrypt } from '@/app/api/auth/session/route';
+
+export async function GET(request: NextRequest) {
+  try {
+    const { searchParams } = new URL(request.url);
+    const owner = searchParams.get('owner');
+    const repo = searchParams.get('repo');
+    const base = searchParams.get('base');
+    const head = searchParams.get('head');
+
+    if (!owner || !repo || !base || !head) {
+      return NextResponse.json({ error: 'Missing owner, repo, base, or head' }, { status: 400 });
+    }
+
+    const authHeader = request.headers.get('authorization');
+    if (!authHeader?.startsWith('Bearer ')) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const idToken = authHeader.split('Bearer ')[1];
+    const decoded = await adminAuth.verifyIdToken(idToken);
+    const userDoc = await adminDb.collection('users').doc(decoded.uid).get();
+    const encryptedToken = userDoc.data()?.encryptedGithubToken;
+    if (!encryptedToken) {
+      return NextResponse.json({ error: 'No GitHub token' }, { status: 401 });
+    }
+
+    const octokit = createOctokitClient(decrypt(encryptedToken));
+    const result = await compareBranches(octokit, owner, repo, base, head);
+    return NextResponse.json(result);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'Failed to compare branches';
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+}

@@ -2,7 +2,7 @@
 
 import { useState, useCallback } from 'react';
 import { useAuth } from '@/providers/auth-provider';
-import type { GitHubRepo, GitHubTreeItem, GitHubContent, GitHubCommit, GitHubBranch } from '@/types';
+import type { GitHubRepo, GitHubTreeItem, GitHubContent, GitHubCommit, GitHubBranch, GitHubPullRequest, GitHubReviewComment, ActivePR } from '@/types';
 
 function useGitHubFetch() {
   const { user } = useAuth();
@@ -47,6 +47,19 @@ export function useGitHubRepos() {
   }, [fetchWithAuth]);
 
   return { repos, loading, fetchRepos };
+}
+
+export function useGitHubRepo() {
+  const fetchWithAuth = useGitHubFetch();
+
+  const fetchRepo = useCallback(
+    async (owner: string, repo: string): Promise<GitHubRepo> => {
+      return fetchWithAuth(`/api/github/repos?owner=${owner}&repo=${repo}`);
+    },
+    [fetchWithAuth]
+  );
+
+  return { fetchRepo };
 }
 
 export function useGitHubTree() {
@@ -112,7 +125,17 @@ export function useGitHubContent() {
     [fetchWithAuth]
   );
 
-  return { loading, fetchContent, updateContent, createContent };
+  const deleteContent = useCallback(
+    async (owner: string, repo: string, path: string, sha: string, message: string, branch?: string) => {
+      return fetchWithAuth('/api/github/contents', {
+        method: 'DELETE',
+        body: JSON.stringify({ owner, repo, path, sha, message, branch }),
+      });
+    },
+    [fetchWithAuth]
+  );
+
+  return { loading, fetchContent, updateContent, createContent, deleteContent };
 }
 
 // Module-level cache so commit data persists across sidebar open/close cycles
@@ -219,6 +242,107 @@ export function useGitHubBranches() {
   return { branches, loading, fetchBranches, createBranch };
 }
 
+// Module-level cache for collaborators
+const _collaboratorsCache = new Map<string, { login: string; avatar_url: string; id: number }[]>();
+
+export function useGitHubCollaborators() {
+  const [collaborators, setCollaborators] = useState<{ login: string; avatar_url: string; id: number }[]>([]);
+  const [loading, setLoading] = useState(false);
+  const fetchWithAuth = useGitHubFetch();
+
+  const fetchCollaborators = useCallback(
+    async (owner: string, repo: string) => {
+      const cacheKey = `${owner}/${repo}`;
+      const cached = _collaboratorsCache.get(cacheKey);
+      if (cached) {
+        setCollaborators(cached);
+        return cached;
+      }
+      setLoading(true);
+      try {
+        const data = await fetchWithAuth(`/api/github/collaborators?owner=${owner}&repo=${repo}`);
+        _collaboratorsCache.set(cacheKey, data);
+        setCollaborators(data);
+        return data;
+      } finally {
+        setLoading(false);
+      }
+    },
+    [fetchWithAuth]
+  );
+
+  return { collaborators, loading, fetchCollaborators };
+}
+
+export interface CompareFile {
+  filename: string;
+  status: 'added' | 'removed' | 'modified' | 'renamed' | 'changed';
+  additions: number;
+  deletions: number;
+  patch?: string;
+}
+
+export interface CompareCommit {
+  sha: string;
+  message: string;
+}
+
+export interface CompareResult {
+  files: CompareFile[];
+  commits: CompareCommit[];
+  totalCommits: number;
+  aheadBy: number;
+}
+
+export function useGitHubCompare() {
+  const [compareData, setCompareData] = useState<CompareResult | null>(null);
+  const [loading, setLoading] = useState(false);
+  const fetchWithAuth = useGitHubFetch();
+
+  const fetchCompare = useCallback(
+    async (owner: string, repo: string, base: string, head: string) => {
+      setLoading(true);
+      setCompareData(null);
+      try {
+        const params = new URLSearchParams({ owner, repo, base, head });
+        const data: CompareResult = await fetchWithAuth(`/api/github/compare?${params}`);
+        setCompareData(data);
+        return data;
+      } catch {
+        setCompareData(null);
+        return null;
+      } finally {
+        setLoading(false);
+      }
+    },
+    [fetchWithAuth]
+  );
+
+  return { compareData, compareLoading: loading, fetchCompare };
+}
+
+export function useGitHubOpenPRs() {
+  const [prs, setPrs] = useState<GitHubPullRequest[]>([]);
+  const [loading, setLoading] = useState(false);
+  const fetchWithAuth = useGitHubFetch();
+
+  const fetchOpenPRs = useCallback(
+    async (owner: string, repo: string) => {
+      setLoading(true);
+      try {
+        const data = await fetchWithAuth(`/api/github/pulls?owner=${owner}&repo=${repo}&state=open`);
+        setPrs(data);
+        return data;
+      } finally {
+        setLoading(false);
+      }
+    },
+    [fetchWithAuth]
+  );
+
+  return { prs, loading, fetchOpenPRs };
+}
+
 export function useGitHubPulls() {
   const [loading, setLoading] = useState(false);
   const fetchWithAuth = useGitHubFetch();
@@ -238,5 +362,103 @@ export function useGitHubPulls() {
     [fetchWithAuth]
   );
 
-  return { loading, createPR };
+  const fetchPRForBranch = useCallback(
+    async (owner: string, repo: string, branchName: string): Promise<ActivePR | null> => {
+      try {
+        const pulls = await fetchWithAuth(
+          `/api/github/pulls?owner=${owner}&repo=${repo}&state=open`
+        );
+        const match = (pulls as { number: number; head: { ref: string; sha: string }; base: { ref: string }; html_url: string }[])
+          .find((p) => p.head.ref === branchName);
+        if (!match) return null;
+        return {
+          number: match.number,
+          headSha: match.head.sha,
+          baseRef: match.base.ref,
+          htmlUrl: match.html_url,
+        };
+      } catch {
+        return null;
+      }
+    },
+    [fetchWithAuth]
+  );
+
+  return { loading, createPR, fetchPRForBranch };
+}
+
+export function useGitHubReviewComments() {
+  const fetchWithAuth = useGitHubFetch();
+
+  const listComments = useCallback(
+    async (owner: string, repo: string, pullNumber: number, path?: string) => {
+      const params = new URLSearchParams({
+        owner,
+        repo,
+        pullNumber: String(pullNumber),
+      });
+      if (path) params.set('path', path);
+      return fetchWithAuth(
+        `/api/github/review-comments?${params}`
+      ) as Promise<GitHubReviewComment[]>;
+    },
+    [fetchWithAuth]
+  );
+
+  const createComment = useCallback(
+    async (
+      owner: string,
+      repo: string,
+      pullNumber: number,
+      body: string,
+      commitId: string,
+      path: string,
+      line: number,
+      startLine?: number
+    ) => {
+      return fetchWithAuth('/api/github/review-comments', {
+        method: 'POST',
+        body: JSON.stringify({ owner, repo, pullNumber, body, commitId, path, line, startLine }),
+      }) as Promise<GitHubReviewComment>;
+    },
+    [fetchWithAuth]
+  );
+
+  const replyToComment = useCallback(
+    async (
+      owner: string,
+      repo: string,
+      pullNumber: number,
+      inReplyTo: number,
+      body: string
+    ) => {
+      return fetchWithAuth('/api/github/review-comments', {
+        method: 'POST',
+        body: JSON.stringify({ owner, repo, pullNumber, inReplyTo, body }),
+      }) as Promise<GitHubReviewComment>;
+    },
+    [fetchWithAuth]
+  );
+
+  const updateComment = useCallback(
+    async (owner: string, repo: string, commentId: number, body: string) => {
+      return fetchWithAuth('/api/github/review-comments', {
+        method: 'PUT',
+        body: JSON.stringify({ owner, repo, commentId, body }),
+      }) as Promise<GitHubReviewComment>;
+    },
+    [fetchWithAuth]
+  );
+
+  const deleteComment = useCallback(
+    async (owner: string, repo: string, commentId: number) => {
+      return fetchWithAuth('/api/github/review-comments', {
+        method: 'DELETE',
+        body: JSON.stringify({ owner, repo, commentId }),
+      });
+    },
+    [fetchWithAuth]
+  );
+
+  return { listComments, createComment, replyToComment, updateComment, deleteComment };
 }

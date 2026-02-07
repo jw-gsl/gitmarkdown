@@ -13,6 +13,8 @@ interface FileStoreState {
   setFiles: (files: FileNode[]) => void;
   setCurrentFile: (file: FileNode | null) => void;
   toggleDir: (path: string) => void;
+  expandAllDirs: () => void;
+  collapseAllDirs: () => void;
   setShowAllFiles: (show: boolean) => void;
   setSearchQuery: (query: string) => void;
   setSyncStatus: (status: SyncStatus) => void;
@@ -42,6 +44,20 @@ export const useFileStore = create<FileStoreState>((set, get) => ({
     }
     set({ expandedDirs: expanded });
   },
+  expandAllDirs: () => {
+    const allDirs = new Set<string>();
+    const collect = (nodes: FileNode[]) => {
+      for (const node of nodes) {
+        if (node.type === 'directory') {
+          allDirs.add(node.path);
+          if (node.children) collect(node.children);
+        }
+      }
+    };
+    collect(get().files);
+    set({ expandedDirs: allDirs });
+  },
+  collapseAllDirs: () => set({ expandedDirs: new Set<string>() }),
   setShowAllFiles: (show) => set({ showAllFiles: show }),
   setSearchQuery: (query) => set({ searchQuery: query }),
   setSyncStatus: (status) => set({ syncStatus: status }),

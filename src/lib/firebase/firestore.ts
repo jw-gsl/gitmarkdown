@@ -209,4 +209,133 @@ export async function deleteFileComment(commentId: string) {
   return deleteDoc(commentRef);
 }
 
+// ── User Settings (synced across devices) ──────────────────────────────
+
+export async function getUserSettings(uid: string): Promise<Record<string, unknown> | null> {
+  const snap = await getDoc(doc(db, 'userSettings', uid));
+  if (!snap.exists()) return null;
+  return snap.data();
+}
+
+export async function saveUserSettings(uid: string, settings: Record<string, unknown>) {
+  await setDoc(
+    doc(db, 'userSettings', uid),
+    { ...settings, updatedAt: serverTimestamp() },
+    { merge: true }
+  );
+}
+
+// ── AI Chat History ──────────────────────────────────────────────────
+
+export interface AIChat {
+  id: string;
+  userId: string;
+  repoFullName: string;
+  title: string;
+  messages: string; // JSON-serialized UIMessage[]
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export async function createAIChat(
+  userId: string,
+  data: { repoFullName: string; title: string; messages: string }
+) {
+  const ref = await addDoc(collection(db, 'users', userId, 'aiChats'), {
+    ...data,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+  return ref.id;
+}
+
+export async function updateAIChat(
+  userId: string,
+  chatId: string,
+  data: Partial<{ title: string; messages: string }>
+) {
+  await updateDoc(doc(db, 'users', userId, 'aiChats', chatId), {
+    ...data,
+    updatedAt: serverTimestamp(),
+  });
+}
+
+export async function getAIChats(userId: string): Promise<AIChat[]> {
+  const q = query(
+    collection(db, 'users', userId, 'aiChats'),
+    orderBy('updatedAt', 'desc'),
+    limit(50)
+  );
+  const snap = await getDocs(q);
+  return snap.docs.map((d) => {
+    const data = d.data();
+    return {
+      id: d.id,
+      userId,
+      repoFullName: data.repoFullName,
+      title: data.title,
+      messages: data.messages,
+      createdAt: (data.createdAt as Timestamp | null)?.toDate() ?? new Date(),
+      updatedAt: (data.updatedAt as Timestamp | null)?.toDate() ?? new Date(),
+    } as AIChat;
+  });
+}
+
+export async function deleteAIChat(userId: string, chatId: string) {
+  await deleteDoc(doc(db, 'users', userId, 'aiChats', chatId));
+}
+
+// ── AI Personas ────────────────────────────────────────────────────────────
+
+export interface AIPersonaDoc {
+  id: string;
+  name: string;
+  description: string;
+  instructions: string;
+  avatar: string;
+  createdAt: Date;
+}
+
+export async function createPersona(
+  userId: string,
+  data: { name: string; description: string; instructions: string; avatar: string }
+) {
+  const ref = await addDoc(collection(db, 'users', userId, 'personas'), {
+    ...data,
+    createdAt: serverTimestamp(),
+  });
+  return ref.id;
+}
+
+export async function getPersonas(userId: string): Promise<AIPersonaDoc[]> {
+  const q = query(
+    collection(db, 'users', userId, 'personas'),
+    orderBy('createdAt', 'asc')
+  );
+  const snap = await getDocs(q);
+  return snap.docs.map((d) => {
+    const data = d.data();
+    return {
+      id: d.id,
+      name: data.name,
+      description: data.description,
+      instructions: data.instructions,
+      avatar: data.avatar,
+      createdAt: (data.createdAt as Timestamp | null)?.toDate() ?? new Date(),
+    };
+  });
+}
+
+export async function updatePersona(
+  userId: string,
+  personaId: string,
+  data: Partial<{ name: string; description: string; instructions: string; avatar: string }>
+) {
+  await updateDoc(doc(db, 'users', userId, 'personas', personaId), data);
+}
+
+export async function deletePersona(userId: string, personaId: string) {
+  await deleteDoc(doc(db, 'users', userId, 'personas', personaId));
+}
+
 export { db };

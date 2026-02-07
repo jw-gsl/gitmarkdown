@@ -1,6 +1,9 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 
+@source "../node_modules/streamdown/dist/*.js";
+
+
 @plugin "@tailwindcss/typography";
 
 @custom-variant dark (&:is(.dark *));
@@ -126,9 +129,29 @@
   }
 }
 
+/* Editor page container */
+.editor-page {
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.05), 0 2px 8px rgba(0, 0, 0, 0.04);
+}
+.dark .editor-page {
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.06), 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
 /* Tiptap Editor Styles */
 .ProseMirror {
   outline: none;
+  padding: 2.5rem 4rem;
+  padding-bottom: 8rem;
+  min-height: calc(100vh - 8rem);
+  /* Inherit font-size & line-height from parent so settings take effect */
+  font-size: inherit;
+  line-height: inherit;
+}
+
+@media (max-width: 767px) {
+  .ProseMirror {
+    padding: 1.5rem 1.25rem 4rem;
+  }
 }
 
 .ProseMirror p.is-editor-empty:first-child::before {
@@ -228,10 +251,21 @@
   background-color: #fef08a;
   border-radius: 0.15rem;
   padding: 0.1rem 0.2rem;
+  transition: background-color 0.2s ease;
+  cursor: pointer;
 }
 
 .dark .ProseMirror mark {
   background-color: #854d0e;
+}
+
+/* Active comment highlight — turns orange when comment is selected */
+.ProseMirror mark.comment-active {
+  background-color: #fdba74 !important;
+}
+
+.dark .ProseMirror mark.comment-active {
+  background-color: #92400e !important;
 }
 
 /* Collaboration cursor styles */

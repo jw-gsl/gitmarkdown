@@ -8,7 +8,7 @@ export const maxDuration = 60;
 
 export async function POST(request: NextRequest) {
   try {
-    const { messages, provider, modelId, fileContext } = await request.json();
+    const { messages, provider, modelId, fileContext, personaInstructions, personaName } = await request.json();
 
     const resolvedProvider = (provider || getDefaultModel().provider) as AIProvider;
     const resolvedModel = modelId || getDefaultModel().modelId;
@@ -65,7 +65,7 @@ When the user's message starts with 'Regarding this text: "..."', they selected 
 - Format responses in markdown when appropriate
 - If asked to generate diagrams, use Mermaid syntax in a code block
 - For questions about the document, reference specific sections
-- Always prefer using the editFile tool over just suggesting changes in text`;
+- Always prefer using the editFile tool over just suggesting changes in text${personaInstructions ? `\n\n## Persona: ${personaName || 'Custom'}\nAdapt your tone and style to match these instructions:\n${personaInstructions}` : ''}`;
 
     // DefaultChatTransport sends UIMessage[] (with `parts` arrays).
     // streamText expects ModelMessage[] — convert first.
