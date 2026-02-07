@@ -6,6 +6,8 @@
 
 A collaborative markdown editor with two-way GitHub sync, real-time collaboration, and AI-powered editing.
 
+![GitMarkdown Editor](public/screenshots/hero-editor-preview.png)
+
 ## Overview
 
 GitMarkdown is a web-based markdown editor that integrates with GitHub repositories. Edit markdown files with a rich WYSIWYG interface, collaborate in real-time, and sync changes directly to GitHub. Built with Next.js 16 and Tiptap v3.
@@ -21,6 +23,8 @@ GitMarkdown is a web-based markdown editor that integrates with GitHub repositor
 **AI** - Chat sidebar, inline editing (Ctrl+K), mermaid diagram generation, custom personas, and multi-provider support (Anthropic Claude, OpenAI).
 
 **Document Management** - File tree with drag-and-drop upload, template gallery, table of contents, backlinks, and zip export.
+
+![Features Overview](public/screenshots/features-github-sync.png)
 
 ## Quick Start
 
