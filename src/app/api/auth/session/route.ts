@@ -2,8 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { adminAuth, adminDb } from '@/lib/firebase/admin';
 import crypto from 'crypto';
 
-const ENCRYPTION_KEY = process.env.GITHUB_TOKEN_ENCRYPTION_KEY ||
-  crypto.createHash('sha256').update(process.env.FIREBASE_ADMIN_PRIVATE_KEY || 'default-key').digest();
+const ENCRYPTION_KEY = process.env.GITHUB_TOKEN_ENCRYPTION_KEY
+  ? crypto.createHash('sha256').update(process.env.GITHUB_TOKEN_ENCRYPTION_KEY).digest()
+  : crypto.createHash('sha256').update(process.env.FIREBASE_ADMIN_PRIVATE_KEY || '').digest();
 
 function encrypt(text: string): string {
   const iv = crypto.randomBytes(16);
