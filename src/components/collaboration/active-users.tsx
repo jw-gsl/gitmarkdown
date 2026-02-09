@@ -17,7 +17,7 @@ export function ActiveUsers({ collaborators, maxVisible = 5 }: ActiveUsersProps)
 
   return (
     <TooltipProvider>
-      <div className="flex items-center -space-x-2">
+      <div data-testid="active-users" aria-label={`${collaborators.length} active collaborator${collaborators.length !== 1 ? 's' : ''}`} className="flex items-center -space-x-2">
         {visible.map((user) => (
           <Tooltip key={user.uid}>
             <TooltipTrigger asChild>

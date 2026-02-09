@@ -1,8 +1,9 @@
 'use client';
 
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { useParams, useSearchParams } from 'next/navigation';
-import { MessageSquare, X, Send } from 'lucide-react';
+import { MessageSquare, X, Send, Check, Sparkles } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { TiptapEditor } from '@/components/editor/tiptap-editor';
 import { EditorHeader } from '@/components/editor/editor-header';
@@ -14,6 +15,13 @@ import { useFileStore } from '@/stores/file-store';
 import { useSyncStore } from '@/stores/sync-store';
 import { useSettingsStore } from '@/stores/settings-store';
 import { isMarkdownFile } from '@/lib/editor/markdown-serializer';
+import { getLanguageForFile, isImageFile } from '@/lib/editor/file-utils';
+import { CodeViewer } from '@/components/editor/code-viewer';
+import { CodeToolbar } from '@/components/editor/code-toolbar';
+import { ImageViewer } from '@/components/editor/image-viewer';
+import { EditorBubbleMenu, type SelectionData } from '@/components/editor/bubble-menu';
+import { InlineEditPanel } from '@/components/editor/inline-edit-panel';
+import { PierreContentDiffView } from '@/components/diff/pierre-diff';
 import { toast } from 'sonner';
 import { useAuth } from '@/providers/auth-provider';
 import { CommitDiffView } from '@/components/github/commit-diff-view';
@@ -47,6 +55,10 @@ function matchesGlob(filePath: string, pattern: string): boolean {
   return regex.test(filePath);
 }
 
+// Module-level cache: survives component remounts (e.g., navigating repo root → file → back)
+const contentCache = new Map<string, { content: string; sha: string; name: string }>();
+let hasLoadedOnce = false;
+
 type AutoSaveStatus = 'idle' | 'saving' | 'saved' | 'error';
 
 interface PendingComment {
@@ -65,7 +77,7 @@ export default function FileEditorPage() {
 
   const { loading, fetchContent, updateContent } = useGitHubContent();
   const { fetchBranches, createBranch } = useGitHubBranches();
-  const { createPR, fetchPRForBranch } = useGitHubPulls();
+  const { createPR } = useGitHubPulls();
   const { collaborators, fetchCollaborators } = useGitHubCollaborators();
   const {
     createComment: createGHComment,
@@ -73,8 +85,8 @@ export default function FileEditorPage() {
     updateComment: updateGHComment,
     deleteComment: deleteGHComment,
   } = useGitHubReviewComments();
-  const { setCurrentFile, currentFile, markDirty, markClean, syncStatus } = useFileStore();
-  const { currentBranch, autoBranchName, setAutoBranchName, setCurrentBranch, setBranches, activePR, setActivePR, clearActivePR } = useSyncStore();
+  const { setCurrentFile, currentFile, markDirty, markClean, syncStatus, setOriginalContent, updateFileContent } = useFileStore();
+  const { currentBranch, autoBranchName, setAutoBranchName, setCurrentBranch, setBranches, activePR, setActivePR } = useSyncStore();
   const {
     autoCommitDelay,
     saveStrategy,
@@ -88,24 +100,31 @@ export default function FileEditorPage() {
   const { user } = useAuth();
   const {
     diffViewCommitSha,
-    commentSidebarOpen,
+    rightPanelOpen,
+    rightPanelTab,
     setCommentSidebarOpen,
     setActiveCommentCount,
     setAIChatContext,
     setAISidebarOpen,
     pendingTextEdit,
     setPendingTextEdit,
+    pushAIEditSnapshot,
+    pendingAIDiff,
+    resolvePendingAIDiff,
+    focusMode,
+    toggleFocusMode,
+    setFocusMode,
   } = useUIStore();
+  // Derive locally — Zustand getter properties break after first set() call (Object.assign evaluates them)
+  const commentSidebarOpen = rightPanelOpen && rightPanelTab === 'comments';
 
   const [content, setContent] = useState<string>('');
   const [sha, setSha] = useState<string>('');
   const [isDirty, setIsDirty] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [fileLoading, setFileLoading] = useState(true);
+  const [fileLoading, setFileLoading] = useState(!hasLoadedOnce);
   const [autoSaveStatus, setAutoSaveStatus] = useState<AutoSaveStatus>('idle');
 
-  // Track whether we've ever loaded a file so we can skip skeletons on subsequent switches
-  const hasLoadedOnce = useRef(false);
   // Skip content re-fetch when we programmatically change branch (e.g. auto-save branch creation)
   const skipBranchRefetch = useRef(false);
 
@@ -131,6 +150,8 @@ export default function FileEditorPage() {
   const ghCommentIdMap = useRef(new Map<string, string>());
 
   const editorContainerRef = useRef<HTMLDivElement>(null);
+  const codeViewerContainerRef = useRef<HTMLDivElement>(null);
+  const [codeEditSelection, setCodeEditSelection] = useState<SelectionData | null>(null);
   const autoCommitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoSavedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoPRCreated = useRef(false);
@@ -166,9 +187,57 @@ export default function FileEditorPage() {
       skipBranchRefetch.current = false;
       return;
     }
+
+    // Check if this file was created via a pending op (not yet pushed to GitHub)
+    const pendingOps = useFileStore.getState().pendingOps;
+    const pendingCreate = pendingOps.find(
+      (op): op is Extract<typeof op, { type: 'create' }> => op.type === 'create' && op.path === filePath
+    );
+    if (pendingCreate) {
+      const pendingContent = pendingCreate.content;
+      const fileName = filePath.split('/').pop() ?? filePath;
+      setContent(pendingContent);
+      setCurrentFile({
+        id: 'pending',
+        path: filePath,
+        name: fileName,
+        type: 'file',
+        sha: '',
+        isMarkdown,
+        content: pendingContent,
+      });
+      setIsDirty(true);
+      markDirty(filePath);
+      setFileLoading(false);
+      hasLoadedOnce = true;
+      return;
+    }
+
+    const cacheKey = `${owner}/${repo}:${currentBranch}:${filePath}`;
+    const cached = contentCache.get(cacheKey);
+
+    // If we have a cached version, show it immediately (no skeleton)
+    if (cached) {
+      setContent(cached.content);
+      setSha(cached.sha);
+      setOriginalContent(filePath, cached.content);
+      setCurrentFile({
+        id: cached.sha,
+        path: filePath,
+        name: cached.name,
+        type: 'file',
+        sha: cached.sha,
+        isMarkdown,
+        content: cached.content,
+      });
+      setIsDirty(false);
+      setFileLoading(false);
+      hasLoadedOnce = true;
+    }
+
     const loadContent = async () => {
-      // Only show loading skeleton on the very first load
-      if (!hasLoadedOnce.current) {
+      // Only show loading skeleton when no cached version and first load
+      if (!cached && !hasLoadedOnce) {
         setFileLoading(true);
       }
       try {
@@ -177,6 +246,9 @@ export default function FileEditorPage() {
           const decoded = fileData.encoding === 'base64'
             ? new TextDecoder().decode(Uint8Array.from(atob(fileData.content.replace(/\n/g, '')), c => c.charCodeAt(0)))
             : fileData.content;
+          // Update cache
+          contentCache.set(cacheKey, { content: decoded, sha: fileData.sha, name: fileData.name });
+          setOriginalContent(filePath, decoded);
           setContent(decoded);
           setSha(fileData.sha);
           setCurrentFile({
@@ -189,10 +261,11 @@ export default function FileEditorPage() {
             content: decoded,
           });
           setIsDirty(false);
-          hasLoadedOnce.current = true;
+          hasLoadedOnce = true;
         }
       } catch (error) {
-        toast.error('Failed to load file');
+        // Only show error if we didn't already have cached content
+        if (!cached) toast.error('Failed to load file');
       } finally {
         setFileLoading(false);
       }
@@ -246,6 +319,9 @@ export default function FileEditorPage() {
       setIsDirty(false);
       markClean(filePath);
       setAutoSaveStatus('saved');
+      // Update content cache with saved version
+      const cacheKey = `${owner}/${repo}:${targetBranch}:${filePath}`;
+      contentCache.set(cacheKey, { content: contentRef.current, sha: result.sha, name: filePath.split('/').pop() || filePath });
 
       // Update activePR headSha so subsequent GitHub review comment calls use the latest commit
       if (activePR && result.commitSha) {
@@ -295,6 +371,7 @@ export default function FileEditorPage() {
   const handleContentChange = useCallback(
     (newContent: string) => {
       setContent(newContent);
+      updateFileContent(filePath, newContent);
       setIsDirty(true);
       markDirty(filePath);
       setAutoSaveStatus('idle');
@@ -314,7 +391,7 @@ export default function FileEditorPage() {
         handleSave();
       }, autoCommitDelay * 1000);
     },
-    [filePath, markDirty, autoCommitDelay, handleSave, excludeBranches, currentBranch, filePattern]
+    [filePath, markDirty, updateFileContent, autoCommitDelay, handleSave, excludeBranches, currentBranch, filePattern]
   );
 
   // Comment handlers
@@ -324,14 +401,32 @@ export default function FileEditorPage() {
       setCommentInputValue('');
 
       // Calculate vertical position relative to editor container
-      const selection = window.getSelection();
-      if (selection && selection.rangeCount > 0 && editorContainerRef.current) {
-        const range = selection.getRangeAt(0);
-        const rect = range.getBoundingClientRect();
-        const containerRect = editorContainerRef.current.getBoundingClientRect();
-        const scrollTop = editorContainerRef.current.scrollTop;
-        const top = rect.top - containerRect.top + scrollTop;
-        setCommentInputTop(Math.max(16, top));
+      const container = editorContainerRef.current;
+      if (container) {
+        const selection = window.getSelection();
+        if (selection && selection.rangeCount > 0 && !selection.isCollapsed) {
+          // DOM selection (markdown editor or readonly code viewer)
+          const range = selection.getRangeAt(0);
+          const rect = range.getBoundingClientRect();
+          const containerRect = container.getBoundingClientRect();
+          const scrollTop = container.scrollTop;
+          const top = rect.top - containerRect.top + scrollTop;
+          setCommentInputTop(Math.max(16, top));
+        } else {
+          // Textarea selection (code viewer editable mode) — use active element position
+          const textarea = container.querySelector('textarea');
+          if (textarea && textarea.selectionStart !== textarea.selectionEnd) {
+            const taRect = textarea.getBoundingClientRect();
+            const containerRect = container.getBoundingClientRect();
+            const scrollTop = container.scrollTop;
+            // Approximate vertical position based on selection start line
+            const textBefore = textarea.value.substring(0, textarea.selectionStart);
+            const lineNumber = textBefore.split('\n').length;
+            const lineHeight = parseFloat(getComputedStyle(textarea).lineHeight) || 20;
+            const top = taRect.top - containerRect.top + scrollTop + lineNumber * lineHeight;
+            setCommentInputTop(Math.max(16, top));
+          }
+        }
       }
 
       // Focus the input after render
@@ -357,6 +452,19 @@ export default function FileEditorPage() {
       });
     },
     [setAIChatContext, setAISidebarOpen]
+  );
+
+  // Code viewer inline edit handlers
+  const handleCodeEditAccept = useCallback(
+    (newText: string) => {
+      if (!codeEditSelection) return;
+      const c = content ?? '';
+      const before = c.substring(0, codeEditSelection.from);
+      const after = c.substring(codeEditSelection.to);
+      handleContentChange(before + newText + after);
+      setCodeEditSelection(null);
+    },
+    [codeEditSelection, content, handleContentChange]
   );
 
   const handleSubmitComment = useCallback(
@@ -395,7 +503,7 @@ export default function FileEditorPage() {
             ghCommentIdMap.current.set(docRef.id, ghId);
             updateFileComment(docRef.id, { githubCommentId: ghId }).catch(() => {});
           }).catch(() => {
-            // Silent — outbound sync is fire-and-forget
+            toast.warning('Comment saved locally but couldn\u2019t sync to GitHub. Try pulling latest changes.');
           });
         }
       } catch {
@@ -448,7 +556,9 @@ export default function FileEditorPage() {
             const ghId = ghComment.id.toString();
             ghCommentIdMap.current.set(docRef.id, ghId);
             updateFileComment(docRef.id, { githubCommentId: ghId }).catch(() => {});
-          }).catch(() => {});
+          }).catch(() => {
+            toast.warning('Reply saved locally but couldn\u2019t sync to GitHub.');
+          });
         }
       } catch {
         toast.error('Failed to add reply');
@@ -620,10 +730,14 @@ export default function FileEditorPage() {
         setTimeout(() => {
           const container = editorContainerRef.current;
           if (!container) return;
+          // Markdown editor: ProseMirror mark
           const activeMark = container.querySelector('mark.comment-active');
           if (activeMark) {
             activeMark.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            return;
           }
+          // Code viewer: the CodeViewer component auto-scrolls via activeAnchorText prop
+          // (scroll is handled inside CodeViewer useEffect)
         }, 80);
       }
     },
@@ -757,25 +871,7 @@ export default function FileEditorPage() {
     fetchCollaborators(owner, repo);
   }, [owner, repo, fetchCollaborators]);
 
-  // PR detection: check if current branch has an open PR
-  const prDetected = useRef(false);
-  useEffect(() => {
-    prDetected.current = false;
-    clearActivePR();
-
-    const detectPR = async () => {
-      try {
-        const pr = await fetchPRForBranch(owner, repo, currentBranch);
-        if (pr) {
-          setActivePR(pr);
-          prDetected.current = true;
-        }
-      } catch {
-        // Silent — PR detection is best-effort
-      }
-    };
-    detectPR();
-  }, [owner, repo, currentBranch, fetchPRForBranch, setActivePR, clearActivePR]);
+  // PR detection is now handled in layout.tsx (per-branch, not per-file)
 
   // Inbound sync: pull GitHub PR review comments periodically
   const lastInboundSync = useRef<string | null>(null);
@@ -845,7 +941,17 @@ export default function FileEditorPage() {
     }
   }, [searchParams, comments, setCommentSidebarOpen]);
 
-  // Keyboard shortcut for save (Cmd+S / Ctrl+S)
+  /** Read the current textarea selection in the code viewer */
+  const getCodeSelection = useCallback((): SelectionData | null => {
+    const container = codeViewerContainerRef.current;
+    if (!container) return null;
+    const textarea = container.querySelector('textarea');
+    if (!textarea || textarea.selectionStart === textarea.selectionEnd) return null;
+    const text = textarea.value.substring(textarea.selectionStart, textarea.selectionEnd);
+    return { text, from: textarea.selectionStart, to: textarea.selectionEnd };
+  }, []);
+
+  // Keyboard shortcut for save (Cmd+S / Ctrl+S) and focus mode (Cmd+.)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 's') {
@@ -856,20 +962,109 @@ export default function FileEditorPage() {
           handleSave();
         }
       }
+      // Cmd+. or Ctrl+. → Toggle focus mode
+      if ((e.metaKey || e.ctrlKey) && e.key === '.') {
+        e.preventDefault();
+        toggleFocusMode();
+      }
+      // Escape → Dismiss AI diff preview or exit focus mode
+      if (e.key === 'Escape') {
+        if (pendingAIDiff) {
+          e.preventDefault();
+          resolvePendingAIDiff(false);
+        } else if (focusMode) {
+          e.preventDefault();
+          setFocusMode(false);
+        }
+      }
+
+      // Code viewer shortcuts (only for non-markdown files)
+      if (!isMarkdown && (e.metaKey || e.ctrlKey)) {
+        // Cmd+E → Inline edit (always preventDefault to block Safari's "Use Selection for Find")
+        if (e.key === 'e' && !e.shiftKey) {
+          e.preventDefault();
+          const sel = getCodeSelection();
+          if (sel) {
+            setCodeEditSelection(sel);
+          }
+        }
+        // Cmd+J → Chat with selection
+        if (e.key === 'j' && !e.shiftKey) {
+          const sel = getCodeSelection();
+          if (sel) {
+            e.preventDefault();
+            handleChatTrigger(sel);
+          }
+        }
+        // Cmd+Shift+M → Comment on selection
+        if (e.key === 'm' && e.shiftKey) {
+          const sel = getCodeSelection();
+          if (sel) {
+            e.preventDefault();
+            handleCommentTrigger(sel);
+          }
+        }
+      }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isDirty, handleSave]);
+  }, [isDirty, handleSave, focusMode, toggleFocusMode, setFocusMode, isMarkdown, getCodeSelection, handleChatTrigger, handleCommentTrigger, pendingAIDiff, resolvePendingAIDiff]);
 
   // Apply text edits from AI sidebar tool calls
   useEffect(() => {
     if (!pendingTextEdit) return;
     const { oldText, newText } = pendingTextEdit;
 
-    // Find and replace in the current content
+    // Special case: revert all AI edits (replace entire content)
+    if (oldText === '\x00REVERT_ALL') {
+      setContent(newText);
+      setIsDirty(true);
+      markDirty(filePath);
+      setPendingTextEdit(null);
+      return;
+    }
+
+    // Find and replace in the current content with fallback strategies
     const currentContent = contentRef.current;
+    let updated: string | null = null;
+
     if (currentContent.includes(oldText)) {
-      const updated = currentContent.replace(oldText, newText);
+      // Exact match
+      updated = currentContent.replace(oldText, newText);
+    } else {
+      // Fallback: try trimmed match (AI sometimes adds/removes trailing whitespace)
+      const trimmedOld = oldText.trim();
+      if (trimmedOld && currentContent.includes(trimmedOld)) {
+        updated = currentContent.replace(trimmedOld, newText.trim());
+      } else {
+        // Fallback: normalize whitespace (collapse runs of spaces/tabs, keep newlines)
+        const normalize = (s: string) => s.replace(/[^\S\n]+/g, ' ');
+        const normalizedContent = normalize(currentContent);
+        const normalizedOld = normalize(oldText);
+        if (normalizedOld && normalizedContent.includes(normalizedOld)) {
+          // Find the position in normalized content, then map back to original
+          const idx = normalizedContent.indexOf(normalizedOld);
+          // Walk original content to find the matching range
+          let origStart = 0, normIdx = 0;
+          for (; normIdx < idx && origStart < currentContent.length; origStart++) {
+            if (normalize(currentContent.slice(origStart, origStart + 1)) === '') continue;
+            normIdx++;
+          }
+          // Find end by matching normalized length
+          let origEnd = origStart;
+          let matchLen = 0;
+          while (matchLen < normalizedOld.length && origEnd < currentContent.length) {
+            origEnd++;
+            matchLen = normalize(currentContent.slice(origStart, origEnd)).length;
+          }
+          updated = currentContent.slice(0, origStart) + newText + currentContent.slice(origEnd);
+        }
+      }
+    }
+
+    if (updated !== null) {
+      // Snapshot current content before applying AI edit (for one-click rollback)
+      pushAIEditSnapshot({ content: currentContent, filePath, timestamp: Date.now() });
       setContent(updated);
       setIsDirty(true);
       markDirty(filePath);
@@ -879,19 +1074,25 @@ export default function FileEditorPage() {
     }
 
     setPendingTextEdit(null);
-  }, [pendingTextEdit, setPendingTextEdit, filePath, markDirty]);
+  }, [pendingTextEdit, setPendingTextEdit, filePath, markDirty, pushAIEditSnapshot]);
 
   const activeCommentCount = comments.filter(
     (c) => !c.parentCommentId && c.status === 'active'
   ).length;
 
   // Collect anchor texts for highlighting in the editor
+  // Include pendingComment text so the highlight appears while the comment input is open
   const commentAnchors = useMemo(
-    () =>
-      comments
+    () => {
+      const anchors = comments
         .filter((c) => !c.parentCommentId && c.status === 'active' && c.anchorText)
-        .map((c) => c.anchorText),
-    [comments]
+        .map((c) => c.anchorText);
+      if (pendingComment?.text && !anchors.includes(pendingComment.text)) {
+        anchors.push(pendingComment.text);
+      }
+      return anchors;
+    },
+    [comments, pendingComment]
   );
 
   // Active comment's anchor text for orange highlight in editor
@@ -907,22 +1108,38 @@ export default function FileEditorPage() {
   }, [activeCommentCount, setActiveCommentCount]);
 
   return (
-    <div className="flex h-full flex-col">
-      <EditorHeader
-        isDirty={isDirty}
-        autoSaveStatus={autoSaveStatus}
+    <div className="flex h-full">
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{
+          __html: JSON.stringify({
+            "@context": "https://schema.org",
+            "@type": "DigitalDocument",
+            "name": currentFile?.name || "Untitled",
+            "encodingFormat": "text/markdown",
+            "isPartOf": {
+              "@type": "SoftwareSourceCode",
+              "codeRepository": `https://github.com/${owner}/${repo}`,
+              "name": `${owner}/${repo}`
+            }
+          })
+        }}
       />
+      <div className="flex flex-1 flex-col min-w-0 overflow-hidden">
+        <EditorHeader
+          isDirty={isDirty}
+          autoSaveStatus={autoSaveStatus}
+        />
 
-      <div className="flex flex-1 overflow-hidden">
         {/* Main editor area */}
-        <div ref={editorContainerRef} className="relative flex-1 overflow-auto">
+        <div ref={editorContainerRef} className="relative flex-1 overflow-auto bg-accent/40 dark:bg-background">
           {diffViewCommitSha ? (
             <CommitDiffView owner={owner} repo={repo} filePath={filePath} />
           ) : (
             <>
               {isMarkdown ? (
                 fileLoading ? (
-                  <div className="min-h-full bg-accent/40 dark:bg-neutral-950">
+                  <div className="min-h-full bg-accent/40 dark:bg-background">
                     <div className="mx-auto max-w-3xl min-h-[calc(100vh-8rem)] bg-background editor-page rounded-lg px-16 py-10">
                       <div className="space-y-4">
                         <div className="h-6 w-3/4 animate-pulse rounded bg-muted" />
@@ -948,21 +1165,114 @@ export default function FileEditorPage() {
                   />
                 )
               ) : (
-                <div className="flex-1 overflow-auto">
-                  {fileLoading ? (
-                    <div className="p-6 space-y-3">
-                      <div className="h-4 w-full animate-pulse rounded bg-muted" />
-                      <div className="h-4 w-5/6 animate-pulse rounded bg-muted" />
-                      <div className="h-4 w-4/5 animate-pulse rounded bg-muted" />
-                      <div className="h-4 w-full animate-pulse rounded bg-muted" />
-                      <div className="h-4 w-2/3 animate-pulse rounded bg-muted" />
-                    </div>
-                  ) : (
-                    <pre className="p-6 font-mono text-sm">{content}</pre>
-                  )}
+                <div className="min-h-full bg-accent/40 dark:bg-background">
+                  <div className="mx-auto max-w-3xl min-h-[calc(100vh-8rem)] bg-background editor-page rounded-lg overflow-hidden flex flex-col">
+                    {fileLoading ? (
+                      <div className="p-6 space-y-3">
+                        <div className="h-4 w-full animate-pulse rounded bg-muted" />
+                        <div className="h-4 w-5/6 animate-pulse rounded bg-muted" />
+                        <div className="h-4 w-4/5 animate-pulse rounded bg-muted" />
+                        <div className="h-4 w-full animate-pulse rounded bg-muted" />
+                        <div className="h-4 w-2/3 animate-pulse rounded bg-muted" />
+                      </div>
+                    ) : isImageFile(filePath) ? (
+                      <ImageViewer
+                        src={`https://raw.githubusercontent.com/${owner}/${repo}/${currentBranch}/${filePath}`}
+                        filename={filePath}
+                      />
+                    ) : (
+                      <>
+                        <CodeToolbar
+                          filename={filePath}
+                          content={content ?? ''}
+                          language={getLanguageForFile(filePath)}
+                          lineCount={(content ?? '').split('\n').length}
+                          onUndo={() => document.execCommand('undo')}
+                          onRedo={() => document.execCommand('redo')}
+                        />
+                        <div ref={codeViewerContainerRef} className="flex-1">
+                          <CodeViewer
+                            content={content ?? ''}
+                            filename={filePath}
+                            onChange={handleContentChange}
+                            commentAnchors={commentAnchors}
+                            activeAnchorText={activeAnchorText}
+                            onHighlightClick={handleHighlightClick}
+                          />
+                        </div>
+                        <EditorBubbleMenu
+                          containerRef={codeViewerContainerRef}
+                          onEdit={(data) => setCodeEditSelection(data)}
+                          onChat={handleChatTrigger}
+                          onComment={handleCommentTrigger}
+                        />
+                        {codeEditSelection && (
+                          <InlineEditPanel
+                            selectedText={codeEditSelection.text}
+                            selectionFrom={codeEditSelection.from}
+                            selectionTo={codeEditSelection.to}
+                            context={content ?? ''}
+                            onAccept={handleCodeEditAccept}
+                            onReject={() => setCodeEditSelection(null)}
+                            onClose={() => setCodeEditSelection(null)}
+                            filename={filePath}
+                          />
+                        )}
+                      </>
+                    )}
+                  </div>
                 </div>
               )}
             </>
+          )}
+
+          {/* Floating AI diff panel — shows proposed edit for review before applying */}
+          {pendingAIDiff && (
+            <div className="absolute inset-x-0 bottom-0 z-40 flex justify-center p-4 pointer-events-none">
+              <div className="pointer-events-auto w-full max-w-2xl rounded-xl border bg-background shadow-2xl animate-in slide-in-from-bottom-4 fade-in duration-200">
+                <div className="flex items-center justify-between border-b px-4 py-2">
+                  <div className="flex items-center gap-2 text-sm font-medium">
+                    <Sparkles className="size-3.5 text-primary" />
+                    AI Edit Preview
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-6 w-6"
+                    onClick={() => resolvePendingAIDiff(false)}
+                    aria-label="Dismiss AI edit preview"
+                  >
+                    <X className="size-3.5" />
+                  </Button>
+                </div>
+                <div className="max-h-[40vh] overflow-auto">
+                  <PierreContentDiffView
+                    oldContent={pendingAIDiff.oldText}
+                    newContent={pendingAIDiff.newText}
+                    viewMode="unified"
+                  />
+                </div>
+                <div className="flex justify-end gap-2 border-t px-4 py-2.5">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => resolvePendingAIDiff(false)}
+                    className="h-7 text-xs px-3"
+                  >
+                    <X className="h-3 w-3 mr-1.5" />
+                    Dismiss
+                  </Button>
+                  <Button
+                    size="sm"
+                    onClick={() => resolvePendingAIDiff(true)}
+                    className="h-7 text-xs px-3"
+                  >
+                    <Check className="h-3 w-3 mr-1.5" />
+                    Apply
+                  </Button>
+                </div>
+              </div>
+            </div>
           )}
 
           {/* Floating inline comment input – positioned next to selected text */}
@@ -1071,25 +1381,58 @@ export default function FileEditorPage() {
           )}
 
         </div>
-
-        {/* Comment sidebar */}
-        <CommentSidebar
-          isOpen={commentSidebarOpen}
-          onClose={() => setCommentSidebarOpen(false)}
-          comments={comments}
-          onAddComment={handleSidebarAddComment}
-          onReplyToComment={handleReplyToComment}
-          onResolveComment={handleResolveComment}
-          onReopenComment={handleReopenComment}
-          onAddReaction={handleAddReaction}
-          onEditComment={handleEditComment}
-          onDeleteComment={handleDeleteComment}
-          activeCommentId={activeCommentId}
-          onSelectComment={handleSelectComment}
-          currentUserId={user?.uid}
-          mentionUsers={collaborators}
-        />
       </div>
+
+      {/* Comment sidebar — portaled into the unified right panel's comments slot */}
+      <CommentPortal
+        isVisible={commentSidebarOpen && !focusMode}
+        comments={comments}
+        onAddComment={handleSidebarAddComment}
+        onReplyToComment={handleReplyToComment}
+        onResolveComment={handleResolveComment}
+        onReopenComment={handleReopenComment}
+        onAddReaction={handleAddReaction}
+        onEditComment={handleEditComment}
+        onDeleteComment={handleDeleteComment}
+        activeCommentId={activeCommentId}
+        onSelectComment={handleSelectComment}
+        currentUserId={user?.uid}
+        mentionUsers={collaborators}
+        onClose={() => setCommentSidebarOpen(false)}
+      />
     </div>
+  );
+}
+
+/** Portals the CommentSidebar into the right panel's comments slot */
+function CommentPortal({
+  isVisible,
+  onClose,
+  ...commentProps
+}: {
+  isVisible: boolean;
+  onClose: () => void;
+} & Omit<React.ComponentProps<typeof CommentSidebar>, 'isOpen' | 'onClose'>) {
+  const [portalTarget, setPortalTarget] = useState<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (isVisible) {
+      // Slot is always mounted (uses hidden class when inactive), so it's always in the DOM
+      const el = document.querySelector('[data-testid="right-panel-comments-slot"]') as HTMLElement | null;
+      setPortalTarget(el);
+    } else {
+      setPortalTarget(null);
+    }
+  }, [isVisible]);
+
+  if (!portalTarget) return null;
+
+  return createPortal(
+    <CommentSidebar
+      isOpen={true}
+      onClose={onClose}
+      {...commentProps}
+    />,
+    portalTarget
   );
 }

@@ -81,6 +81,9 @@ export function MentionDropdown({
 
   return (
     <div
+      data-testid="mention-dropdown"
+      role="listbox"
+      aria-label="Mention a user"
       className="absolute z-50 w-56 rounded-md border bg-popover shadow-lg"
       style={{ bottom: `calc(100% + ${position.top}px)`, left: position.left }}
     >
@@ -88,6 +91,9 @@ export function MentionDropdown({
         {filtered.map((user, index) => (
           <button
             key={user.id}
+            role="option"
+            aria-selected={index === selectedIndex}
+            aria-label={`Mention ${user.login}`}
             className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors ${
               index === selectedIndex
                 ? 'bg-accent text-accent-foreground'

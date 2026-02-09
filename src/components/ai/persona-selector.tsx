@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import dynamic from 'next/dynamic';
 import data from '@emoji-mart/data';
 import { ChevronDown, Plus, Trash2, Check } from 'lucide-react';
@@ -87,6 +87,8 @@ export function PersonaSelector() {
   const [newEmoji, setNewEmoji] = useState('✦');
   const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  const listRef = useRef<HTMLDivElement>(null);
 
   const allPersonas: AIPersona[] = [...DEFAULT_PERSONAS, ...customPersonas];
   const active = allPersonas.find((p) => p.id === activePersonaId) ?? DEFAULT_PERSONAS[0];
@@ -135,10 +137,39 @@ export function PersonaSelector() {
     [confirmDeleteId, user, remove, activePersonaId, setActivePersonaId]
   );
 
+  // Reset selectedIndex to active persona when popover opens
+  useEffect(() => {
+    if (open && !creating) {
+      const activeIdx = allPersonas.findIndex((p) => p.id === activePersonaId);
+      setSelectedIndex(activeIdx >= 0 ? activeIdx : 0);
+      // Focus the list for keyboard navigation
+      setTimeout(() => listRef.current?.focus(), 0);
+    }
+  }, [open, creating]);
+
+  const handleListKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (creating) return;
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setSelectedIndex((prev) => Math.min(prev + 1, allPersonas.length - 1));
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setSelectedIndex((prev) => Math.max(prev - 1, 0));
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (allPersonas[selectedIndex]) {
+        handleSelect(allPersonas[selectedIndex]);
+      }
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      setOpen(false);
+    }
+  }, [allPersonas, selectedIndex, handleSelect, creating]);
+
   return (
     <Popover open={open} onOpenChange={(o) => { setOpen(o); if (!o) { setCreating(false); setConfirmDeleteId(null); setEmojiPickerOpen(false); } }}>
       <PopoverTrigger asChild>
-        <button className="flex items-center gap-1 px-4 py-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors">
+        <button data-testid="persona-selector" aria-label={`Current AI persona: ${active.name}. Click to change persona`} className="flex items-center gap-1 px-2 py-1 text-xs text-muted-foreground hover:text-foreground transition-colors truncate">
           Chatting with <span className="font-medium text-foreground">{active.name}</span>
           <ChevronDown className="h-3 w-3" />
         </button>
@@ -200,13 +231,22 @@ export function PersonaSelector() {
         ) : (
           /* ── Persona list ── */
           <div>
-            <div className="max-h-64 overflow-y-auto py-1">
-              {allPersonas.map((persona) => (
+            <div
+              ref={listRef}
+              tabIndex={0}
+              onKeyDown={handleListKeyDown}
+              className="max-h-64 overflow-y-auto py-1 outline-none"
+            >
+              {allPersonas.map((persona, index) => (
                 <div
                   key={persona.id}
+                  data-testid={`persona-item-${persona.id}`}
+                  aria-label={`Select persona: ${persona.name}`}
+                  aria-selected={persona.id === activePersonaId}
+                  role="option"
                   className={`group flex items-center gap-2.5 px-3 py-2 cursor-pointer hover:bg-accent/50 transition-colors ${
                     persona.id === activePersonaId ? 'bg-accent/30' : ''
-                  }`}
+                  } ${index === selectedIndex ? 'ring-1 ring-inset ring-ring' : ''}`}
                   onClick={() => handleSelect(persona)}
                 >
                   <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-muted text-sm">
@@ -221,7 +261,7 @@ export function PersonaSelector() {
                         </span>
                       )}
                     </div>
-                    <p className="text-[11px] text-muted-foreground truncate">{persona.description}</p>
+                    <p className="text-xs text-muted-foreground truncate">{persona.description}</p>
                   </div>
                   {!persona.isDefault && (
                     <button
@@ -244,6 +284,8 @@ export function PersonaSelector() {
             {user && (
               <div className="border-t">
                 <button
+                  data-testid="persona-create"
+                  aria-label="Create a new AI persona"
                   className="flex w-full items-center gap-2.5 px-3 py-2.5 text-xs text-muted-foreground hover:text-foreground hover:bg-accent/50 transition-colors"
                   onClick={() => setCreating(true)}
                 >

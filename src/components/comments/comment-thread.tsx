@@ -16,6 +16,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { PierreContentDiffView } from '@/components/diff/pierre-diff';
 import { toast } from 'sonner';
 import { MentionDropdown, type MentionUser } from './mention-dropdown';
 import type { Comment } from '@/types';
@@ -71,7 +72,7 @@ function CommentMessage({ comment, onReaction }: { comment: Comment; onReaction?
       <div className="flex-1 min-w-0">
         <div className="flex flex-col">
           <span className="text-xs font-medium">{comment.author.displayName}</span>
-          <span className="text-[11px] text-muted-foreground leading-tight">
+          <span className="text-xs text-muted-foreground leading-tight">
             {formatTime(comment.createdAt)}
           </span>
         </div>
@@ -118,12 +119,11 @@ function CommentMessage({ comment, onReaction }: { comment: Comment; onReaction?
         </div>
         {comment.type === 'suggestion' && comment.suggestion && (
           <div className="mt-2 rounded border text-xs overflow-hidden">
-            <div className="bg-red-50 dark:bg-red-950/30 px-2 py-1 line-through text-red-700 dark:text-red-400">
-              {comment.suggestion.originalText}
-            </div>
-            <div className="bg-green-50 dark:bg-green-950/30 px-2 py-1 text-green-700 dark:text-green-400">
-              {comment.suggestion.suggestedText}
-            </div>
+            <PierreContentDiffView
+              oldContent={comment.suggestion.originalText}
+              newContent={comment.suggestion.suggestedText}
+              viewMode="unified"
+            />
           </div>
         )}
         {Object.entries(comment.reactions).filter(([, users]) => users.length > 0).length > 0 && (
@@ -227,6 +227,8 @@ function InlineReplyInput({
       <div className="relative">
         <Textarea
           ref={textareaRef}
+          data-testid="comment-reply-input"
+          aria-label="Reply to comment thread"
           value={content}
           onChange={handleChange}
           onFocus={() => setIsFocused(true)}
@@ -320,6 +322,8 @@ export function CommentThread({
 
   return (
     <div
+      data-testid={`comment-thread-${comment.id}`}
+      aria-label={`Comment thread by ${comment.author.displayName}`}
       className={`relative rounded-lg border p-3 cursor-pointer transition-colors ${
         isResolved ? 'bg-muted/40' : ''
       } ${isActive ? 'ring-2 ring-primary/30' : ''}`}
@@ -332,6 +336,8 @@ export function CommentThread({
             <Button
               variant="ghost"
               size="icon"
+              data-testid="comment-resolve"
+              aria-label="Resolve this comment thread"
               className="h-6 w-6"
               onClick={onResolve}
               title="Resolve"
@@ -350,6 +356,8 @@ export function CommentThread({
               <Button
                 variant="ghost"
                 size="icon"
+                data-testid="comment-more-options"
+                aria-label="More comment options"
                 className="h-6 w-6"
                 title="More options"
               >

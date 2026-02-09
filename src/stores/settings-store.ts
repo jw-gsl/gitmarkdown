@@ -1,6 +1,14 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { AIProvider } from '@/types';
+import type { CodeThemeKey } from '@/lib/editor/shiki';
+
+export interface CustomSnippet {
+  id: string;
+  trigger: string;
+  title: string;
+  content: string;
+}
 
 export type SaveStrategy = 'main' | 'branch';
 export type CommitValidationLevel = 'none' | 'warning' | 'error';
@@ -56,6 +64,7 @@ interface SettingsStoreState {
   editorFontSize: number;
   editorLineHeight: number;
   showLineNumbers: boolean;
+  codeTheme: CodeThemeKey;
   autoCommitDelay: number;
   saveStrategy: SaveStrategy;
   autoBranchPrefix: string;
@@ -68,6 +77,8 @@ interface SettingsStoreState {
   autoCreatePRTitle: string;
   commitValidationLevel: CommitValidationLevel;
   activePersonaId: string;
+  tabCompletionsEnabled: boolean;
+  customSnippets: CustomSnippet[];
 
   setTheme: (theme: SettingsStoreState['theme']) => void;
   setAIProvider: (provider: AIProvider) => void;
@@ -75,6 +86,7 @@ interface SettingsStoreState {
   setEditorFontSize: (size: number) => void;
   setEditorLineHeight: (height: number) => void;
   setShowLineNumbers: (show: boolean) => void;
+  setCodeTheme: (theme: CodeThemeKey) => void;
   setAutoCommitDelay: (delay: number) => void;
   setSaveStrategy: (strategy: SaveStrategy) => void;
   setAutoBranchPrefix: (prefix: string) => void;
@@ -87,6 +99,10 @@ interface SettingsStoreState {
   setAutoCreatePRTitle: (title: string) => void;
   setCommitValidationLevel: (level: CommitValidationLevel) => void;
   setActivePersonaId: (id: string) => void;
+  setTabCompletionsEnabled: (enabled: boolean) => void;
+  addSnippet: (snippet: CustomSnippet) => void;
+  updateSnippet: (id: string, updates: Partial<Omit<CustomSnippet, 'id'>>) => void;
+  removeSnippet: (id: string) => void;
 }
 
 export const useSettingsStore = create<SettingsStoreState>()(
@@ -98,6 +114,7 @@ export const useSettingsStore = create<SettingsStoreState>()(
       editorFontSize: 16,
       editorLineHeight: 1.6,
       showLineNumbers: false,
+      codeTheme: 'github' as CodeThemeKey,
       autoCommitDelay: 30,
       saveStrategy: 'main',
       autoBranchPrefix: 'gitmarkdown-auto/',
@@ -110,6 +127,8 @@ export const useSettingsStore = create<SettingsStoreState>()(
       autoCreatePRTitle: 'Auto-save changes from GitMarkdown',
       commitValidationLevel: 'none',
       activePersonaId: 'default',
+      tabCompletionsEnabled: true,
+      customSnippets: [],
 
       setTheme: (theme) => set({ theme }),
       setAIProvider: (provider) => set({ aiProvider: provider }),
@@ -117,6 +136,7 @@ export const useSettingsStore = create<SettingsStoreState>()(
       setEditorFontSize: (size) => set({ editorFontSize: size }),
       setEditorLineHeight: (height) => set({ editorLineHeight: height }),
       setShowLineNumbers: (show) => set({ showLineNumbers: show }),
+      setCodeTheme: (theme) => set({ codeTheme: theme }),
       setAutoCommitDelay: (delay) => set({ autoCommitDelay: delay }),
       setSaveStrategy: (strategy) => set({ saveStrategy: strategy }),
       setAutoBranchPrefix: (prefix) => set({ autoBranchPrefix: prefix }),
@@ -129,6 +149,19 @@ export const useSettingsStore = create<SettingsStoreState>()(
       setAutoCreatePRTitle: (title) => set({ autoCreatePRTitle: title }),
       setCommitValidationLevel: (level) => set({ commitValidationLevel: level }),
       setActivePersonaId: (id) => set({ activePersonaId: id }),
+      setTabCompletionsEnabled: (enabled) => set({ tabCompletionsEnabled: enabled }),
+      addSnippet: (snippet) =>
+        set((s) => ({ customSnippets: [...s.customSnippets, snippet] })),
+      updateSnippet: (id, updates) =>
+        set((s) => ({
+          customSnippets: s.customSnippets.map((sn) =>
+            sn.id === id ? { ...sn, ...updates } : sn
+          ),
+        })),
+      removeSnippet: (id) =>
+        set((s) => ({
+          customSnippets: s.customSnippets.filter((sn) => sn.id !== id),
+        })),
     }),
     { name: 'gitmarkdown-settings' }
   )

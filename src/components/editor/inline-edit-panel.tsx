@@ -12,6 +12,7 @@ import {
 } from '@/components/ai/chat-message';
 import { DiffView } from '@/components/ai/diff-view';
 import { useSettingsStore } from '@/stores/settings-store';
+import { isMarkdownFile } from '@/lib/editor/markdown-serializer';
 
 interface InlineEditPanelProps {
   selectedText: string;
@@ -21,6 +22,7 @@ interface InlineEditPanelProps {
   onAccept: (newText: string) => void;
   onReject: () => void;
   onClose: () => void;
+  filename?: string;
 }
 
 interface EditMessage {
@@ -30,7 +32,8 @@ interface EditMessage {
   isStreaming?: boolean;
 }
 
-const quickSuggestions = ['Fix grammar', 'Make concise', 'Improve clarity', 'Make formal'];
+const writingSuggestions = ['Fix grammar', 'Make concise', 'Improve clarity', 'Make formal'];
+const codeSuggestions = ['Fix bug', 'Add types', 'Simplify', 'Add error handling'];
 
 let messageIdCounter = 0;
 function generateMessageId(): string {
@@ -43,6 +46,7 @@ export function InlineEditPanel({
   onReject,
   onClose,
   context,
+  filename,
 }: InlineEditPanelProps) {
   const [messages, setMessages] = useState<EditMessage[]>([]);
   const [inputValue, setInputValue] = useState('');
@@ -52,6 +56,7 @@ export function InlineEditPanel({
   const abortRef = useRef<AbortController | null>(null);
   const aiProvider = useSettingsStore((s) => s.aiProvider);
   const aiModel = useSettingsStore((s) => s.aiModel);
+  const quickSuggestions = filename && !isMarkdownFile(filename) ? codeSuggestions : writingSuggestions;
 
   // Auto-focus input on mount
   useEffect(() => {
@@ -183,7 +188,7 @@ export function InlineEditPanel({
   };
 
   return (
-    <div className="fixed inset-x-0 bottom-0 z-50 animate-in slide-in-from-bottom-4 fade-in duration-200 sm:absolute sm:inset-auto sm:right-4 sm:top-16 sm:w-96 sm:animate-in sm:slide-in-from-right-4 sm:fade-in">
+    <div className="fixed inset-x-0 bottom-0 z-50 animate-in slide-in-from-bottom-4 fade-in duration-200 sm:absolute sm:inset-auto sm:right-4 sm:top-16 sm:w-96 sm:animate-in sm:slide-in-from-right-4 sm:fade-in" data-testid="inline-edit-panel">
       <div className="flex max-h-[70vh] flex-col rounded-t-xl border bg-background shadow-xl sm:max-h-[80vh] sm:rounded-lg">
         {/* Header */}
         <div className="flex items-center justify-between border-b px-3 py-2">
@@ -191,7 +196,7 @@ export function InlineEditPanel({
             <Pencil className="size-3.5" />
             Edit text
           </div>
-          <Button variant="ghost" size="icon-xs" onClick={onClose}>
+          <Button variant="ghost" size="icon-xs" onClick={onClose} data-testid="inline-edit-cancel" aria-label="Close inline edit panel">
             <X className="size-3.5" />
           </Button>
         </div>
@@ -213,6 +218,8 @@ export function InlineEditPanel({
                   key={suggestion}
                   onClick={() => handleQuickSuggestion(suggestion)}
                   className="rounded-full border bg-secondary/50 px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+                  data-testid={`inline-edit-suggestion-${suggestion.toLowerCase().replace(/\s+/g, '-')}`}
+                  aria-label={`Apply quick edit: ${suggestion}`}
                 >
                   {suggestion}
                 </button>
@@ -281,12 +288,17 @@ export function InlineEditPanel({
               placeholder={messages.length === 0 ? 'Enter edit instructions...' : 'Send follow-up instruction...'}
               className="h-8 text-sm"
               disabled={isStreaming}
+              data-testid="inline-edit-input"
+              aria-label="AI edit instruction"
             />
             <Button
               size="icon-xs"
               className="size-8 shrink-0"
               onClick={handleSubmit}
               disabled={!inputValue.trim() || isStreaming}
+              data-testid="inline-edit-submit"
+              aria-label="Apply AI edit"
+              aria-busy={isStreaming}
             >
               {isStreaming ? (
                 <Loader2 className="size-3.5 animate-spin" />

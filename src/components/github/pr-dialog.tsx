@@ -23,6 +23,7 @@ import {
 import { useSyncStore } from '@/stores/sync-store';
 import { useGitHubCompare, type CompareFile } from '@/hooks/use-github';
 import { useAuth } from '@/providers/auth-provider';
+import { PierrePatchDiffView } from '@/components/diff/pierre-diff';
 
 interface PRDialogProps {
   open: boolean;
@@ -40,43 +41,6 @@ const STATUS_COLORS: Record<string, string> = {
   changed: 'bg-gray-100 text-gray-800 dark:bg-gray-900/40 dark:text-gray-300',
 };
 
-function UnifiedDiff({ patch }: { patch: string }) {
-  const lines = patch.split('\n');
-  return (
-    <table className="w-full text-xs font-mono">
-      <tbody>
-        {lines.map((line, i) => {
-          let bg = '';
-          let prefix = ' ';
-          let prefixColor = '';
-          if (line.startsWith('+') && !line.startsWith('+++')) {
-            bg = 'bg-green-50 dark:bg-green-950/30';
-            prefix = '+';
-            prefixColor = 'text-green-600';
-          } else if (line.startsWith('-') && !line.startsWith('---')) {
-            bg = 'bg-red-50 dark:bg-red-950/30';
-            prefix = '-';
-            prefixColor = 'text-red-600';
-          } else if (line.startsWith('@@')) {
-            bg = 'bg-blue-50 dark:bg-blue-950/20';
-            prefixColor = 'text-blue-600';
-          }
-          return (
-            <tr key={i} className={bg}>
-              <td className="w-4 select-none text-center">
-                {prefixColor ? <span className={prefixColor}>{prefix}</span> : null}
-              </td>
-              <td className="whitespace-pre-wrap px-2 py-0.5">
-                {line.startsWith('+') || line.startsWith('-') ? line.slice(1) : line}
-              </td>
-            </tr>
-          );
-        })}
-      </tbody>
-    </table>
-  );
-}
-
 function FileDiffItem({ file }: { file: CompareFile }) {
   const [open, setOpen] = useState(false);
 
@@ -86,7 +50,7 @@ function FileDiffItem({ file }: { file: CompareFile }) {
         <ChevronRight className={`h-3.5 w-3.5 shrink-0 transition-transform ${open ? 'rotate-90' : ''}`} />
         <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
         <span className="truncate text-left flex-1 font-mono text-xs">{file.filename}</span>
-        <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${STATUS_COLORS[file.status] || ''}`}>
+        <Badge variant="outline" className={`text-xs px-1.5 py-0 ${STATUS_COLORS[file.status] || ''}`}>
           {file.status}
         </Badge>
         <span className="flex items-center gap-1 text-xs shrink-0">
@@ -96,8 +60,8 @@ function FileDiffItem({ file }: { file: CompareFile }) {
       </CollapsibleTrigger>
       <CollapsibleContent>
         {file.patch ? (
-          <div className="ml-5 mr-2 mb-2 overflow-x-auto rounded border">
-            <UnifiedDiff patch={file.patch} />
+          <div className="ml-5 mr-2 mb-2 overflow-hidden rounded border">
+            <PierrePatchDiffView patch={file.patch} fileName={file.filename} viewMode="unified" />
           </div>
         ) : (
           <p className="ml-8 text-xs text-muted-foreground py-1">Binary file or no diff available</p>
@@ -174,7 +138,7 @@ export function PRDialog({ open, onOpenChange, onCreatePR, owner, repo }: PRDial
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-2xl h-[min(85vh,640px)] flex flex-col overflow-hidden">
+      <DialogContent data-testid="pr-dialog" className="sm:max-w-2xl h-[min(85vh,640px)] flex flex-col overflow-hidden">
         <DialogHeader>
           <DialogTitle>Create Pull Request</DialogTitle>
           <DialogDescription>
@@ -199,6 +163,7 @@ export function PRDialog({ open, onOpenChange, onCreatePR, owner, repo }: PRDial
             </div>
             <Input
               id="pr-title"
+              data-testid="pr-title-input"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="Add feature documentation"
@@ -222,6 +187,7 @@ export function PRDialog({ open, onOpenChange, onCreatePR, owner, repo }: PRDial
             </div>
             <Textarea
               id="pr-body"
+              data-testid="pr-body-input"
               value={body}
               onChange={(e) => setBody(e.target.value)}
               placeholder="Describe your changes..."
@@ -234,6 +200,8 @@ export function PRDialog({ open, onOpenChange, onCreatePR, owner, repo }: PRDial
             <Label htmlFor="pr-base">Base branch</Label>
             <select
               id="pr-base"
+              data-testid="pr-base-select"
+              aria-label="Select base branch for pull request"
               value={base}
               onChange={(e) => setBase(e.target.value)}
               className="mt-1.5 flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm"
@@ -279,8 +247,8 @@ export function PRDialog({ open, onOpenChange, onCreatePR, owner, repo }: PRDial
           )}
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button onClick={handleCreate} disabled={loading || !title.trim()}>
+          <Button variant="outline" data-testid="pr-cancel" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <Button data-testid="pr-submit" aria-label="Create pull request" onClick={handleCreate} disabled={loading || !title.trim()}>
             {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
             Create PR
           </Button>

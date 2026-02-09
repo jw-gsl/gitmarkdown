@@ -1,20 +1,31 @@
 'use client';
 
-import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
-import { useParams } from 'next/navigation';
+import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
+import { useParams, useRouter } from 'next/navigation';
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport, isToolUIPart, getToolName, type DynamicToolUIPart } from 'ai';
 import { Streamdown } from 'streamdown';
 import { code } from '@streamdown/code';
 import {
-  ArrowUp, X, Sparkles, Loader2, FileText, AlertCircle, Wrench, Check, CheckCheck, XCircle,
-  History, Plus, Trash2, Mic, MicOff,
+  ArrowUp, ArrowLeft, X, Sparkles, Loader2, FileText, AlertCircle, Wrench, Check,
+  History, Plus, Trash2, Mic, MicOff, RotateCcw, Search, Globe, Link, FolderOpen,
+  GitBranch, Users, Pencil, Copy,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
-import { EditToolDiff } from '@/components/ai/chat-message';
+import {
+  ContextMenu, ContextMenuTrigger, ContextMenuContent, ContextMenuItem, ContextMenuSeparator,
+} from '@/components/ui/context-menu';
+import {
+  EditToolDiff, WriteFileDiff, CreateFilePreview, RenameFilePreview,
+  DeleteFilePreview, SuggestResponsesView, ToolResultDisplay,
+  CommitProposal, CreateBranchProposal,
+  AIMessageAvatar, UserMessageAvatar,
+} from '@/components/ai/chat-message';
 import { PersonaSelector, useActivePersona } from '@/components/ai/persona-selector';
 import { AIProviderSelect } from './ai-provider-select';
 import {
@@ -52,6 +63,37 @@ interface AISidebarProps {
   onClose: () => void;
 }
 
+/** Error boundary around the messages area — catches rendering crashes without losing chat state */
+class ChatErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { hasError: boolean }
+> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false };
+  }
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="flex flex-col items-center justify-center p-6 text-center gap-3">
+          <AlertCircle className="h-6 w-6 text-muted-foreground" />
+          <p className="text-sm text-muted-foreground">Failed to render messages</p>
+          <button
+            onClick={() => this.setState({ hasError: false })}
+            className="rounded-md border px-3 py-1.5 text-xs hover:bg-accent transition-colors"
+          >
+            Try again
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 /** Recursively flatten a FileNode tree into a flat list of files (no directories). */
 function flattenFiles(nodes: FileNode[]): FileNode[] {
   const result: FileNode[] = [];
@@ -81,28 +123,51 @@ const MODEL_MAX_TOKENS: Record<string, number> = {
 
 export function AISidebar({ isOpen, onClose }: AISidebarProps) {
   const params = useParams();
+  const router = useRouter();
   const owner = params.owner as string;
   const repo = params.repo as string;
   const { user } = useAuth();
   const { aiProvider, aiModel } = useSettingsStore();
   const activePersona = useActivePersona();
-  const { currentFile, files } = useFileStore();
-  const { currentBranch } = useSyncStore();
+  const { currentFile, files, addPendingOp, applyOpToTree } = useFileStore();
+  const { currentBranch, baseBranch } = useSyncStore();
   const { fetchContent } = useGitHubContent();
+
+  /** Navigate to a file path in the editor */
+  const navigateToFile = useCallback(
+    (path: string) => {
+      const base = `/${owner}/${repo}/${path}`;
+      const url = currentBranch && currentBranch !== baseBranch
+        ? `${base}?branch=${encodeURIComponent(currentBranch)}`
+        : base;
+      router.push(url);
+    },
+    [owner, repo, currentBranch, baseBranch, router]
+  );
   const scrollRef = useRef<HTMLDivElement>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const mentionDropdownRef = useRef<HTMLDivElement>(null);
   const [input, setInput] = useState('');
   const [mentionedFiles, setMentionedFiles] = useState<MentionedFile[]>([]);
+  const [excludeCurrentFile, setExcludeCurrentFile] = useState(false);
   const [showMentionDropdown, setShowMentionDropdown] = useState(false);
   const [mentionQuery, setMentionQuery] = useState('');
   const [mentionStartIndex, setMentionStartIndex] = useState(-1);
   const [selectedMentionIndex, setSelectedMentionIndex] = useState(0);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [toolCallStatuses, setToolCallStatuses] = useState<Record<string, 'accepted' | 'rejected'>>({});
+  /** Tracks which tool call is currently being previewed in the editor diff */
+  const pendingDiffToolCallRef = useRef<{ toolCallId: string; oldText: string; newText: string; isFullRewrite: boolean } | null>(null);
   const aiChatContext = useUIStore((s) => s.aiChatContext);
   const setAIChatContext = useUIStore((s) => s.setAIChatContext);
   const setPendingTextEdit = useUIStore((s) => s.setPendingTextEdit);
+  const setPendingAIDiff = useUIStore((s) => s.setPendingAIDiff);
+  const pendingAIDiffResolved = useUIStore((s) => s.pendingAIDiffResolved);
+  const clearPendingAIDiffResolved = useUIStore((s) => s.clearPendingAIDiffResolved);
+  const aiEditSnapshots = useUIStore((s) => s.aiEditSnapshots);
+  const popAIEditSnapshot = useUIStore((s) => s.popAIEditSnapshot);
+  const clearAIEditSnapshots = useUIStore((s) => s.clearAIEditSnapshots);
 
   // ── Chat history state ─────────────────────────────────────────────
   const [showHistory, setShowHistory] = useState(false);
@@ -110,6 +175,10 @@ export function AISidebar({ isOpen, onClose }: AISidebarProps) {
   const [currentChatId, setCurrentChatId] = useState<string | null>(null);
   const [loadingChats, setLoadingChats] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [historySearch, setHistorySearch] = useState('');
+  const [renamingChatId, setRenamingChatId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState('');
+  const renameInputRef = useRef<HTMLInputElement>(null);
   const titleGenerated = useRef(false);
   const prevStatus = useRef<string>('ready');
 
@@ -117,26 +186,30 @@ export function AISidebar({ isOpen, onClose }: AISidebarProps) {
   const [isListening, setIsListening] = useState(false);
   const recognitionRef = useRef<any>(null);
 
-  // Get all markdown files from the file tree
-  const allMarkdownFiles = useMemo(() => {
-    return flattenFiles(files).filter((f) => f.isMarkdown);
+  // Get all files from the file tree (not just markdown)
+  const allFiles = useMemo(() => {
+    return flattenFiles(files);
   }, [files]);
 
   // Filter files based on mention query
   const filteredMentionFiles = useMemo(() => {
-    if (!mentionQuery) return allMarkdownFiles;
+    if (!mentionQuery) return allFiles;
     const q = mentionQuery.toLowerCase();
-    return allMarkdownFiles.filter(
+    return allFiles.filter(
       (f) =>
         f.name.toLowerCase().includes(q) ||
         f.path.toLowerCase().includes(q)
     );
-  }, [allMarkdownFiles, mentionQuery]);
+  }, [allFiles, mentionQuery]);
+
+  // Reset exclusion when switching files
+  const currentFilePath = currentFile?.path;
+  useEffect(() => { setExcludeCurrentFile(false); }, [currentFilePath]);
 
   // Build file context string from mentioned files + current file
   const fileContextString = useMemo(() => {
     const parts: string[] = [];
-    if (currentFile?.content) {
+    if (currentFile?.content && !excludeCurrentFile) {
       parts.push(`Current file (${currentFile.path}):\n\n${currentFile.content}`);
     }
     for (const mf of mentionedFiles) {
@@ -145,31 +218,81 @@ export function AISidebar({ isOpen, onClose }: AISidebarProps) {
       }
     }
     return parts.length > 0 ? parts.join('\n\n---\n\n') : undefined;
-  }, [currentFile, mentionedFiles]);
+  }, [currentFile, mentionedFiles, excludeCurrentFile]);
 
   const suggestions = useMemo(() => {
     if (!currentFile) return ['Write a blog post', 'Create a README', 'Generate a table of contents'];
+    if (currentFile.isMarkdown) {
+      return [
+        `Summarize ${currentFile.name}`,
+        'Improve the writing',
+        'Fix grammar and spelling',
+        'Add more detail',
+      ];
+    }
     return [
-      `Summarize ${currentFile.name}`,
-      'Improve the writing',
-      'Fix grammar and spelling',
-      'Add more detail',
+      `Explain ${currentFile.name}`,
+      'Find potential bugs',
+      'Add error handling',
+      'Refactor this file',
     ];
   }, [currentFile]);
+
+  // Build a compact file tree string for AI context
+  const fileTreeString = useMemo(() => {
+    const lines: string[] = [];
+    const walk = (nodes: FileNode[], indent: string) => {
+      for (const n of nodes) {
+        lines.push(`${indent}${n.type === 'directory' ? n.name + '/' : n.name}`);
+        if (n.children && lines.length < 200) walk(n.children, indent + '  ');
+      }
+    };
+    walk(files, '');
+    if (lines.length === 0) return undefined;
+    if (lines.length > 200) return lines.slice(0, 200).join('\n') + '\n...(truncated)';
+    return lines.join('\n');
+  }, [files]);
+
+  // Use a ref for the transport body so that changing file content or persona
+  // doesn't recreate the transport and reset useChat's message state.
+  const transportBodyRef = useRef({
+    provider: aiProvider,
+    modelId: aiModel,
+    fileContext: fileContextString,
+    personaInstructions: activePersona.instructions || undefined,
+    personaName: activePersona.name,
+    owner,
+    repo,
+    branch: currentBranch,
+    fileTree: fileTreeString,
+  });
+  transportBodyRef.current = {
+    provider: aiProvider,
+    modelId: aiModel,
+    fileContext: fileContextString,
+    personaInstructions: activePersona.instructions || undefined,
+    personaName: activePersona.name,
+    owner,
+    repo,
+    branch: currentBranch,
+    fileTree: fileTreeString,
+  };
+
+  // Keep a ref to the user for async header resolution
+  const userRef = useRef(user);
+  userRef.current = user;
 
   const transport = useMemo(
     () =>
       new DefaultChatTransport({
         api: '/api/ai/chat',
-        body: {
-          provider: aiProvider,
-          modelId: aiModel,
-          fileContext: fileContextString,
-          personaInstructions: activePersona.instructions || undefined,
-          personaName: activePersona.name,
+        headers: async (): Promise<Record<string, string>> => {
+          const idToken = await userRef.current?.getIdToken();
+          return idToken ? { Authorization: `Bearer ${idToken}` } : {};
         },
+        body: () => transportBodyRef.current,
       }),
-    [aiProvider, aiModel, fileContextString, activePersona.instructions, activePersona.name]
+    []
   );
 
   const { messages, sendMessage, status, setMessages, error } = useChat({
@@ -223,9 +346,7 @@ export function AISidebar({ isOpen, onClose }: AISidebarProps) {
   }, [error]);
 
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [messages]);
 
   // When chat context is set from the editor (user clicked "Chat" in bubble menu),
@@ -266,8 +387,8 @@ export function AISidebar({ isOpen, onClose }: AISidebarProps) {
       const chats = await getAIChats(user.uid);
       const repoChats = chats.filter((c) => c.repoFullName === `${owner}/${repo}`);
       setChatList(repoChats);
-    } catch {
-      // ignore
+    } catch (err) {
+      console.error('[AI Chat] Failed to load chat list:', err);
     } finally {
       setLoadingChats(false);
     }
@@ -279,23 +400,33 @@ export function AISidebar({ isOpen, onClose }: AISidebarProps) {
   }, [showHistory, user, loadChatList]);
 
   // ── Chat history: save current chat ────────────────────────────────
+  // Use refs for frequently-changing values to keep saveChat stable
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
+  const currentChatIdRef = useRef(currentChatId);
+  currentChatIdRef.current = currentChatId;
+
   const saveChat = useCallback(async () => {
-    if (!user || messages.length === 0) return;
+    const msgs = messagesRef.current;
+    const chatId = currentChatIdRef.current;
+    if (!user || msgs.length === 0) return;
     try {
-      const serialized = JSON.stringify(messages);
-      if (currentChatId) {
-        await updateAIChat(user.uid, currentChatId, { messages: serialized });
+      const serialized = JSON.stringify(msgs);
+      if (chatId) {
+        await updateAIChat(user.uid, chatId, { messages: serialized });
       } else {
         const id = await createAIChat(user.uid, {
           repoFullName: `${owner}/${repo}`,
           title: 'New Chat',
           messages: serialized,
         });
+        // Update ref immediately to prevent duplicate creates from concurrent calls
+        currentChatIdRef.current = id;
         setCurrentChatId(id);
         // Generate title from first user message
         if (!titleGenerated.current) {
           titleGenerated.current = true;
-          const firstUserMsg = messages.find((m) => m.role === 'user');
+          const firstUserMsg = msgs.find((m) => m.role === 'user');
           if (firstUserMsg) {
             const textPart = firstUserMsg.parts?.find((p) => p.type === 'text') as { type: 'text'; text: string } | undefined;
             const text = textPart?.text || (firstUserMsg as any).content || '';
@@ -317,17 +448,44 @@ export function AISidebar({ isOpen, onClose }: AISidebarProps) {
           }
         }
       }
-    } catch {
-      // ignore save errors
+    } catch (err) {
+      console.error('[AI Chat] Failed to save chat:', err);
     }
-  }, [user, messages, currentChatId, owner, repo]);
+  }, [user, owner, repo]);
 
-  // Auto-save when AI finishes responding (status goes from streaming → ready)
+  // Handle resolution of a pending AI diff shown in the editor
   useEffect(() => {
-    if (prevStatus.current === 'streaming' && status === 'ready' && messages.length > 0) {
+    if (pendingAIDiffResolved === null) return;
+    const pending = pendingDiffToolCallRef.current;
+    if (!pending) {
+      clearPendingAIDiffResolved();
+      return;
+    }
+    if (pendingAIDiffResolved) {
+      // User accepted from the editor — apply the edit
+      if (pending.isFullRewrite) {
+        setPendingTextEdit({ oldText: '\x00REVERT_ALL', newText: pending.newText });
+      } else {
+        setPendingTextEdit({ oldText: pending.oldText, newText: pending.newText });
+      }
+      setToolCallStatuses((prev) => ({ ...prev, [pending.toolCallId]: 'accepted' }));
+    } else {
+      // User rejected from the editor
+      setToolCallStatuses((prev) => ({ ...prev, [pending.toolCallId]: 'rejected' }));
+    }
+    pendingDiffToolCallRef.current = null;
+    clearPendingAIDiffResolved();
+  }, [pendingAIDiffResolved, clearPendingAIDiffResolved, setPendingTextEdit]);
+
+  // Auto-save when AI finishes responding or after an error
+  useEffect(() => {
+    const prev = prevStatus.current;
+    prevStatus.current = status;
+    if (messages.length === 0) return;
+    // Save when transitioning to ready/error from any active state
+    if ((status === 'ready' || status === 'error') && (prev === 'streaming' || prev === 'submitted')) {
       saveChat();
     }
-    prevStatus.current = status;
   }, [status, messages.length, saveChat]);
 
   // ── Chat history: new / load / delete ──────────────────────────────
@@ -367,8 +525,7 @@ export function AISidebar({ isOpen, onClose }: AISidebarProps) {
   );
 
   const handleDeleteChat = useCallback(
-    async (chatId: string, e: React.MouseEvent) => {
-      e.stopPropagation();
+    async (chatId: string) => {
       if (!user) return;
       try {
         await deleteAIChat(user.uid, chatId);
@@ -384,6 +541,50 @@ export function AISidebar({ isOpen, onClose }: AISidebarProps) {
     },
     [user, currentChatId, setMessages]
   );
+
+  const handleRenameChat = useCallback(
+    async (chatId: string, newTitle: string) => {
+      if (!user || !newTitle.trim()) return;
+      try {
+        await updateAIChat(user.uid, chatId, { title: newTitle.trim() });
+        setChatList((prev) => prev.map((c) => c.id === chatId ? { ...c, title: newTitle.trim() } : c));
+      } catch {
+        toast.error('Failed to rename chat');
+      }
+      setRenamingChatId(null);
+    },
+    [user]
+  );
+
+  const handleDuplicateChat = useCallback(
+    async (chat: AIChat) => {
+      if (!user) return;
+      try {
+        const id = await createAIChat(user.uid, {
+          repoFullName: chat.repoFullName,
+          title: `${chat.title} (copy)`,
+          messages: chat.messages,
+        });
+        setChatList((prev) => [{ ...chat, id, title: `${chat.title} (copy)`, createdAt: new Date(), updatedAt: new Date() }, ...prev]);
+        toast.success('Chat duplicated');
+      } catch {
+        toast.error('Failed to duplicate chat');
+      }
+    },
+    [user]
+  );
+
+  // Filtered chat list based on search
+  const filteredChatList = useMemo(() => {
+    if (!historySearch.trim()) return chatList;
+    const q = historySearch.toLowerCase();
+    return chatList.filter((c) => c.title.toLowerCase().includes(q));
+  }, [chatList, historySearch]);
+
+  // Focus rename input when it appears
+  useEffect(() => {
+    if (renamingChatId) renameInputRef.current?.focus();
+  }, [renamingChatId]);
 
   // ── Speech recognition ─────────────────────────────────────────────
   const toggleListening = useCallback(() => {
@@ -516,8 +717,10 @@ export function AISidebar({ isOpen, onClose }: AISidebarProps) {
       setErrorMessage(null);
       sendMessage({ text: input });
       setInput('');
+      // Save after a short delay so the message array has the new user message
+      setTimeout(() => saveChat(), 500);
     },
-    [input, isLoading, sendMessage]
+    [input, isLoading, sendMessage, saveChat]
   );
 
   const handleKeyDown = useCallback(
@@ -561,7 +764,7 @@ export function AISidebar({ isOpen, onClose }: AISidebarProps) {
     setErrorMessage(null);
   }, []);
 
-  /** Collect pending editFile tool call IDs for a given message */
+  /** Collect pending tool call IDs (editFile, writeFile, createFile) for a given message */
   const getPendingEditIds = useCallback(
     (message: (typeof messages)[number]) => {
       if (message.role !== 'assistant' || !message.parts) return [];
@@ -570,13 +773,13 @@ export function AISidebar({ isOpen, onClose }: AISidebarProps) {
           if (!isToolUIPart(part)) return null;
           const toolPart = part as DynamicToolUIPart;
           const toolName = getToolName(toolPart);
-          if (toolName !== 'editFile') return null;
+          if (!['editFile', 'writeFile', 'createFile', 'renameFile', 'deleteFile', 'commitChanges', 'createBranch'].includes(toolName ?? '')) return null;
           if (toolPart.state !== 'output-available' && toolPart.state !== 'input-available') return null;
           const toolCallId = toolPart.toolCallId ?? `${message.id}-${i}`;
           if (toolCallStatuses[toolCallId]) return null;
-          return { toolCallId, input: toolPart.input as Record<string, string> | undefined };
+          return { toolCallId, toolName, input: toolPart.input as Record<string, string> | undefined };
         })
-        .filter(Boolean) as { toolCallId: string; input: Record<string, string> | undefined }[];
+        .filter(Boolean) as { toolCallId: string; toolName: string; input: Record<string, string> | undefined }[];
     },
     [toolCallStatuses]
   );
@@ -584,14 +787,32 @@ export function AISidebar({ isOpen, onClose }: AISidebarProps) {
   const handleAcceptAll = useCallback(
     (message: (typeof messages)[number]) => {
       const pending = getPendingEditIds(message);
-      for (const { toolCallId, input: toolInput } of pending) {
+      for (const { toolCallId, toolName, input: toolInput } of pending) {
         if (toolInput) {
-          setPendingTextEdit({ oldText: toolInput.oldText ?? '', newText: toolInput.newText ?? '' });
+          if (toolName === 'editFile') {
+            setPendingTextEdit({ oldText: toolInput.oldText ?? '', newText: toolInput.newText ?? '' });
+          } else if (toolName === 'writeFile') {
+            setPendingTextEdit({ oldText: '\x00REVERT_ALL', newText: toolInput.content ?? '' });
+          } else if (toolName === 'createFile') {
+            const filePath = toolInput.path ?? '';
+            const op = { type: 'create' as const, path: filePath, content: toolInput.content ?? '' };
+            addPendingOp(op);
+            applyOpToTree(op);
+            if (filePath) navigateToFile(filePath);
+          } else if (toolName === 'renameFile') {
+            const op = { type: 'rename' as const, oldPath: toolInput.oldPath ?? '', newPath: toolInput.newPath ?? '', sha: '', content: '' };
+            addPendingOp(op);
+            applyOpToTree(op);
+          } else if (toolName === 'deleteFile') {
+            const op = { type: 'delete' as const, path: toolInput.path ?? '', sha: '' };
+            addPendingOp(op);
+            applyOpToTree(op);
+          }
         }
         setToolCallStatuses((prev) => ({ ...prev, [toolCallId]: 'accepted' }));
       }
     },
-    [getPendingEditIds, setPendingTextEdit]
+    [getPendingEditIds, setPendingTextEdit, addPendingOp, applyOpToTree, navigateToFile]
   );
 
   const handleRejectAll = useCallback(
@@ -604,146 +825,252 @@ export function AISidebar({ isOpen, onClose }: AISidebarProps) {
     [getPendingEditIds]
   );
 
-  if (!isOpen) return null;
+  /** Revert all AI edits by restoring the first snapshot */
+  const handleRevertAll = useCallback(() => {
+    const snapshots = aiEditSnapshots;
+    if (snapshots.length === 0) return;
+    // Restore the oldest snapshot (pre-AI state)
+    const oldest = snapshots[0];
+    setPendingTextEdit({ oldText: '', newText: '' }); // Clear any pending
+    // Set all tool calls to rejected
+    setToolCallStatuses((prev) => {
+      const updated = { ...prev };
+      for (const key of Object.keys(updated)) {
+        if (updated[key] === 'accepted') {
+          updated[key] = 'rejected';
+        }
+      }
+      return updated;
+    });
+    // Apply rollback via a special "replace everything" edit
+    // We use the current content as oldText and the snapshot content as newText
+    // But since we don't know current content here, we use the store mechanism
+    setPendingTextEdit({ oldText: '\x00REVERT_ALL', newText: oldest.content });
+    clearAIEditSnapshots();
+    toast.success('Reverted all AI edits');
+  }, [aiEditSnapshots, setPendingTextEdit, clearAIEditSnapshots]);
 
   // Extra mentioned files (not the current file)
   const extraMentionedFiles = mentionedFiles.filter((f) => f.path !== currentFile?.path);
 
   return (
-    <div className="flex h-full w-80 flex-col border-l bg-background">
-      {/* ── Header ──────────────────────────────────────────────────── */}
-      <div className="flex items-center justify-between border-b px-4 py-3">
-        <div className="flex items-center gap-1">
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-7 w-7"
-            onClick={() => { setShowHistory(!showHistory); setConfirmDeleteId(null); }}
-          >
-            <History className="h-3.5 w-3.5" />
-          </Button>
-          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={startNewChat}>
-            <Plus className="h-3.5 w-3.5" />
-          </Button>
-        </div>
-        <span className="font-semibold text-sm">AI Assistant</span>
-        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onClose}>
-          <X className="h-3.5 w-3.5" />
-        </Button>
-      </div>
-
-      {/* ── Persona selector ───────────────────────────────────────── */}
-      <div className="border-b">
-        <PersonaSelector />
-      </div>
-
-      {/* ── History panel ───────────────────────────────────────────── */}
-      {showHistory ? (
-        <ScrollArea className="flex-1 min-h-0">
-          <div className="p-3 space-y-0.5">
-            {loadingChats ? (
-              <div className="flex justify-center py-8">
-                <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-              </div>
-            ) : chatList.length === 0 ? (
-              <p className="text-center text-xs text-muted-foreground py-8">
-                No previous chats
-              </p>
-            ) : (
-              chatList.map((chat) => (
-                <div
-                  key={chat.id}
-                  className={`group flex items-center justify-between rounded-md px-3 py-2 cursor-pointer hover:bg-accent/50 transition-colors ${
-                    chat.id === currentChatId ? 'bg-accent' : ''
-                  }`}
-                  onClick={() => loadChat(chat)}
-                >
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-medium truncate">{chat.title}</p>
-                    <p className="text-[10px] text-muted-foreground">
-                      {chat.updatedAt.toLocaleDateString(undefined, {
-                        month: 'short',
-                        day: 'numeric',
-                      })}
-                    </p>
-                  </div>
+    <aside data-testid="ai-sidebar" aria-label="AI Assistant" className="flex h-full w-full flex-col bg-background">
+      <TooltipProvider delayDuration={300}>
+        <div className="flex items-center border-b px-1 py-0.5">
+          {showHistory ? (
+            <>
+              <Tooltip>
+                <TooltipTrigger asChild>
                   <Button
                     variant="ghost"
                     size="icon"
-                    className={`h-6 w-6 shrink-0 transition-opacity ${
-                      confirmDeleteId === chat.id ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
-                    }`}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      if (confirmDeleteId === chat.id) {
-                        handleDeleteChat(chat.id, e);
-                        setConfirmDeleteId(null);
-                      } else {
-                        setConfirmDeleteId(chat.id);
-                      }
-                    }}
-                    title={confirmDeleteId === chat.id ? 'Click to confirm' : 'Delete chat'}
+                    aria-label="Back to chat"
+                    className="h-8 w-8"
+                    onClick={() => { setShowHistory(false); setHistorySearch(''); setRenamingChatId(null); }}
                   >
-                    {confirmDeleteId === chat.id ? (
-                      <Check className="h-3 w-3" />
-                    ) : (
-                      <Trash2 className="h-3 w-3 text-muted-foreground" />
-                    )}
+                    <ArrowLeft className="h-4 w-4" />
                   </Button>
-                </div>
-              ))
-            )}
+                </TooltipTrigger>
+                <TooltipContent side="bottom"><p className="text-xs">Back to chat</p></TooltipContent>
+              </Tooltip>
+              <span className="text-sm font-medium flex-1">Chat History</span>
+            </>
+          ) : (
+            <>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    data-testid="ai-history-button"
+                    aria-label="Chat history"
+                    className="h-8 w-8"
+                    onClick={() => { setShowHistory(true); setConfirmDeleteId(null); }}
+                  >
+                    <History className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom"><p className="text-xs">Chat history</p></TooltipContent>
+              </Tooltip>
+              <div className="flex-1 min-w-0">
+                <PersonaSelector />
+              </div>
+            </>
+          )}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button variant="ghost" size="icon" data-testid="ai-new-chat" aria-label="New chat" className="h-8 w-8" onClick={startNewChat}>
+                <Plus className="h-4 w-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom"><p className="text-xs">New chat</p></TooltipContent>
+          </Tooltip>
+        </div>
+      </TooltipProvider>
+
+      {/* ── History panel ───────────────────────────────────────────── */}
+      {showHistory ? (
+        <div className="flex flex-1 min-h-0 flex-col">
+          {/* Search bar */}
+          <div className="px-3 pt-2 pb-1">
+            <div className="relative">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+              <Input
+                placeholder="Search chats..."
+                value={historySearch}
+                onChange={(e) => setHistorySearch(e.target.value)}
+                className="h-8 pl-8 text-xs"
+              />
+            </div>
           </div>
-        </ScrollArea>
+          <ScrollArea className="flex-1 min-h-0">
+            <div className="p-3 pt-1 space-y-0.5">
+              {loadingChats ? (
+                <div className="flex justify-center py-8">
+                  <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                </div>
+              ) : filteredChatList.length === 0 ? (
+                <p className="text-center text-xs text-muted-foreground py-8">
+                  {historySearch ? 'No matching chats' : 'No previous chats'}
+                </p>
+              ) : (
+                filteredChatList.map((chat) => (
+                  <ContextMenu key={chat.id}>
+                    <ContextMenuTrigger asChild>
+                      <div
+                        className={`group flex items-center justify-between rounded-md px-3 py-2 cursor-pointer hover:bg-accent/50 transition-colors ${
+                          chat.id === currentChatId ? 'bg-accent' : ''
+                        }`}
+                        onClick={() => { if (renamingChatId !== chat.id) loadChat(chat); }}
+                      >
+                        <div className="min-w-0 flex-1">
+                          {renamingChatId === chat.id ? (
+                            <Input
+                              ref={renameInputRef}
+                              value={renameValue}
+                              onChange={(e) => setRenameValue(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') handleRenameChat(chat.id, renameValue);
+                                if (e.key === 'Escape') setRenamingChatId(null);
+                              }}
+                              onBlur={() => handleRenameChat(chat.id, renameValue)}
+                              className="h-6 text-sm font-medium px-1"
+                              onClick={(e) => e.stopPropagation()}
+                            />
+                          ) : (
+                            <p className="text-sm font-medium truncate">{chat.title}</p>
+                          )}
+                          <p className="text-xs text-muted-foreground">
+                            {chat.updatedAt.toLocaleDateString(undefined, {
+                              month: 'short',
+                              day: 'numeric',
+                            })}
+                          </p>
+                        </div>
+                      </div>
+                    </ContextMenuTrigger>
+                    <ContextMenuContent>
+                      <ContextMenuItem
+                        onClick={() => {
+                          setRenamingChatId(chat.id);
+                          setRenameValue(chat.title);
+                        }}
+                      >
+                        <Pencil className="h-4 w-4" />
+                        Rename
+                      </ContextMenuItem>
+                      <ContextMenuItem onClick={() => handleDuplicateChat(chat)}>
+                        <Copy className="h-4 w-4" />
+                        Duplicate
+                      </ContextMenuItem>
+                      <ContextMenuSeparator />
+                      <ContextMenuItem onClick={() => handleDeleteChat(chat.id)}>
+                        <Trash2 className="h-4 w-4" />
+                        Delete
+                      </ContextMenuItem>
+                    </ContextMenuContent>
+                  </ContextMenu>
+                ))
+              )}
+            </div>
+          </ScrollArea>
+        </div>
       ) : (
         <>
-          {/* ── Messages area ─────────────────────────────────────────── */}
-          <ScrollArea className="flex-1 min-h-0 p-4" ref={scrollRef}>
-            {messages.length === 0 && !errorMessage && (
-              <div className="flex flex-col items-center justify-center py-8 text-center">
-                <Sparkles className="mb-3 h-8 w-8 text-muted-foreground" />
+          {messages.length === 0 && !errorMessage ? (
+            /* ── Empty state — pushed toward input ──────────────────── */
+            <div className="flex-1 flex flex-col justify-end px-3 pb-3 min-h-0">
+              <div className="text-center mb-6">
+                <Sparkles className="mb-3 h-8 w-8 text-muted-foreground mx-auto" />
                 <p className="text-sm font-medium">How can I help?</p>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  Type <kbd className="rounded border bg-muted px-1 py-0.5 text-[10px]">@</kbd> to mention a file for context.
+                  Type <kbd className="rounded border bg-muted px-1 py-0.5 text-xs">@</kbd> to mention a file for context.
                 </p>
               </div>
-            )}
+              <div className="flex flex-col gap-1.5">
+                {suggestions.map((s) => (
+                  <button
+                    key={s}
+                    data-testid="ai-suggestion"
+                    aria-label={`Send suggested prompt: ${s}`}
+                    onClick={() => sendMessage({ text: s })}
+                    className="rounded-full border bg-background px-2.5 py-1 text-xs text-left hover:bg-accent transition-colors"
+                  >
+                    {s}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : (
+          <>
+          {/* ── Messages area ─────────────────────────────────────────── */}
+          <ChatErrorBoundary>
+          <ScrollArea className="flex-1 min-h-0 p-4" ref={scrollRef} data-testid="ai-messages" role="log" aria-live="polite" aria-relevant="additions">
             <div className="space-y-4">
               {messages.map((message, msgIdx) => (
                 <div
                   key={message.id}
-                  className={`min-w-0 ${message.role === 'user' ? 'flex justify-end' : 'flex gap-2.5'}`}
+                  className={`min-w-0 ${message.role === 'user' ? 'flex justify-end gap-2.5' : 'flex gap-2.5 overflow-hidden'}`}
                 >
                   {message.role === 'assistant' && (
-                    <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-muted text-xs mt-1">
-                      {activePersona.avatar}
-                    </span>
+                    <AIMessageAvatar avatar={activePersona.avatar} />
                   )}
                   <div
-                    className={`rounded-lg px-3 py-2 text-sm min-w-0 overflow-hidden ${
+                    className={`rounded-lg py-2 text-sm min-w-0 ${
                       message.role === 'user'
-                        ? 'bg-primary text-primary-foreground max-w-[85%]'
-                        : 'flex-1 bg-muted'
+                        ? 'px-3 overflow-hidden break-words bg-primary text-primary-foreground max-w-[85%]'
+                        : 'px-2 overflow-hidden break-words flex-1 min-w-0 bg-muted'
                     }`}
+                    style={{ overflowWrap: 'anywhere' }}
                   >
-                    {message.parts?.map((part, i) => {
+                    {/* Reorder assistant parts: text first, then tool calls (so text appears above diffs) */}
+                    {(message.role === 'assistant'
+                      ? [...(message.parts ?? [])].sort((a, b) => {
+                          const aIsText = a.type === 'text' ? 0 : 1;
+                          const bIsText = b.type === 'text' ? 0 : 1;
+                          return aIsText - bIsText;
+                        })
+                      : message.parts ?? []
+                    ).map((part, i) => {
                       if (part.type === 'text') {
+                        const textContent = (part as { type: 'text'; text: string }).text;
+                        if (!textContent) return null;
                         if (message.role === 'assistant') {
                           const isLastAssistant = isLoading && msgIdx === messages.length - 1;
                           return (
-                            <div key={i} className="max-w-none break-words overflow-x-auto text-sm">
+                            <div key={i} className="max-w-full min-w-0 break-words overflow-hidden text-sm">
                               <Streamdown
                                 plugins={{ code }}
                                 isAnimating={isLastAssistant}
                                 caret={isLastAssistant ? 'block' : undefined}
                               >
-                                {part.text}
+                                {textContent}
                               </Streamdown>
                             </div>
                           );
                         }
                         // For user messages, render @mentions as inline badges
-                        const text = part.text;
+                        const text = textContent;
                         const mentionRegex = /@([\w\-_.]+\.\w+)/g;
                         const segments: React.ReactNode[] = [];
                         let lastIndex = 0;
@@ -753,8 +1080,8 @@ export function AISidebar({ isOpen, onClose }: AISidebarProps) {
                             segments.push(text.slice(lastIndex, match.index));
                           }
                           segments.push(
-                            <span key={match.index} className="inline-flex items-center gap-0.5 rounded bg-primary-foreground/20 px-1 py-0.5 text-[11px] font-medium">
-                              <FileText className="h-2.5 w-2.5" />
+                            <span key={match.index} className="inline-flex items-center gap-0.5 rounded bg-primary-foreground/20 px-1 py-0.5 text-xs font-medium">
+                              <FileText className="h-3 w-3" />
                               {match[1]}
                             </span>
                           );
@@ -777,17 +1104,22 @@ export function AISidebar({ isOpen, onClose }: AISidebarProps) {
                           // Show diff once input is available (input-available or output-available)
                           if (toolPart.state === 'output-available' || toolPart.state === 'input-available') {
                             return (
-                              <div key={i} className="my-2">
+                              <div key={i} className="my-2 overflow-hidden max-w-full min-w-0">
                                 <EditToolDiff
                                   oldText={toolInput.oldText ?? ''}
                                   newText={toolInput.newText ?? ''}
                                   status={toolCallStatus ?? 'pending'}
                                   onAccept={(editedText) => {
-                                    setPendingTextEdit({ oldText: toolInput.oldText ?? '', newText: editedText });
-                                    setToolCallStatuses((prev) => ({ ...prev, [toolCallId]: 'accepted' }));
+                                    // Show diff in editor area for review
+                                    pendingDiffToolCallRef.current = { toolCallId, oldText: toolInput.oldText ?? '', newText: editedText, isFullRewrite: false };
+                                    setPendingAIDiff({ oldText: toolInput.oldText ?? '', newText: editedText, isFullRewrite: false });
                                   }}
                                   onReject={() => {
                                     setToolCallStatuses((prev) => ({ ...prev, [toolCallId]: 'rejected' }));
+                                  }}
+                                  onRestore={() => {
+                                    pendingDiffToolCallRef.current = { toolCallId, oldText: toolInput.oldText ?? '', newText: toolInput.newText ?? '', isFullRewrite: false };
+                                    setPendingAIDiff({ oldText: toolInput.oldText ?? '', newText: toolInput.newText ?? '', isFullRewrite: false });
                                   }}
                                 />
                               </div>
@@ -798,6 +1130,349 @@ export function AISidebar({ isOpen, onClose }: AISidebarProps) {
                           );
                         }
 
+                        if (toolName === 'writeFile' && toolInput) {
+                          if (toolPart.state === 'output-available' || toolPart.state === 'input-available') {
+                            return (
+                              <div key={i} className="my-2 overflow-hidden max-w-full min-w-0">
+                                <WriteFileDiff
+                                  currentContent={currentFile?.content ?? ''}
+                                  proposedContent={toolInput.content ?? ''}
+                                  status={toolCallStatus ?? 'pending'}
+                                  onAccept={() => {
+                                    // Show diff in editor area for review
+                                    pendingDiffToolCallRef.current = { toolCallId, oldText: currentFile?.content ?? '', newText: toolInput.content ?? '', isFullRewrite: true };
+                                    setPendingAIDiff({ oldText: currentFile?.content ?? '', newText: toolInput.content ?? '', isFullRewrite: true });
+                                  }}
+                                  onReject={() => {
+                                    setToolCallStatuses((prev) => ({ ...prev, [toolCallId]: 'rejected' }));
+                                  }}
+                                  onRestore={() => {
+                                    pendingDiffToolCallRef.current = { toolCallId, oldText: currentFile?.content ?? '', newText: toolInput.content ?? '', isFullRewrite: true };
+                                    setPendingAIDiff({ oldText: currentFile?.content ?? '', newText: toolInput.content ?? '', isFullRewrite: true });
+                                  }}
+                                />
+                              </div>
+                            );
+                          }
+                          return (
+                            <p key={i} className="my-2 text-xs text-muted-foreground animate-pulse">Rewriting file...</p>
+                          );
+                        }
+
+                        if (toolName === 'createFile' && toolInput) {
+                          if (toolPart.state === 'output-available' || toolPart.state === 'input-available') {
+                            return (
+                              <div key={i} className="my-2 overflow-hidden max-w-full min-w-0">
+                                <CreateFilePreview
+                                  filePath={toolInput.path ?? ''}
+                                  content={toolInput.content ?? ''}
+                                  status={toolCallStatus ?? 'pending'}
+                                  onAccept={() => {
+                                    const filePath = toolInput.path ?? '';
+                                    const op = { type: 'create' as const, path: filePath, content: toolInput.content ?? '' };
+                                    addPendingOp(op);
+                                    applyOpToTree(op);
+                                    setToolCallStatuses((prev) => ({ ...prev, [toolCallId]: 'accepted' }));
+                                    // Navigate to the newly created file
+                                    if (filePath) navigateToFile(filePath);
+                                  }}
+                                  onReject={() => {
+                                    setToolCallStatuses((prev) => ({ ...prev, [toolCallId]: 'rejected' }));
+                                  }}
+                                />
+                              </div>
+                            );
+                          }
+                          return (
+                            <p key={i} className="my-2 text-xs text-muted-foreground animate-pulse">Creating file...</p>
+                          );
+                        }
+
+                        if (toolName === 'renameFile' && toolInput) {
+                          if (toolPart.state === 'output-available' || toolPart.state === 'input-available') {
+                            return (
+                              <div key={i} className="my-2 overflow-hidden max-w-full min-w-0">
+                                <RenameFilePreview
+                                  oldPath={toolInput.oldPath ?? ''}
+                                  newPath={toolInput.newPath ?? ''}
+                                  status={toolCallStatus ?? 'pending'}
+                                  onAccept={() => {
+                                    const op = { type: 'rename' as const, oldPath: toolInput.oldPath ?? '', newPath: toolInput.newPath ?? '', sha: '', content: '' };
+                                    addPendingOp(op);
+                                    applyOpToTree(op);
+                                    setToolCallStatuses((prev) => ({ ...prev, [toolCallId]: 'accepted' }));
+                                  }}
+                                  onReject={() => {
+                                    setToolCallStatuses((prev) => ({ ...prev, [toolCallId]: 'rejected' }));
+                                  }}
+                                />
+                              </div>
+                            );
+                          }
+                          return <p key={i} className="my-2 text-xs text-muted-foreground animate-pulse">Renaming file...</p>;
+                        }
+
+                        if (toolName === 'deleteFile' && toolInput) {
+                          if (toolPart.state === 'output-available' || toolPart.state === 'input-available') {
+                            return (
+                              <div key={i} className="my-2 overflow-hidden max-w-full min-w-0">
+                                <DeleteFilePreview
+                                  filePath={toolInput.path ?? ''}
+                                  status={toolCallStatus ?? 'pending'}
+                                  onAccept={() => {
+                                    const op = { type: 'delete' as const, path: toolInput.path ?? '', sha: '' };
+                                    addPendingOp(op);
+                                    applyOpToTree(op);
+                                    setToolCallStatuses((prev) => ({ ...prev, [toolCallId]: 'accepted' }));
+                                  }}
+                                  onReject={() => {
+                                    setToolCallStatuses((prev) => ({ ...prev, [toolCallId]: 'rejected' }));
+                                  }}
+                                />
+                              </div>
+                            );
+                          }
+                          return <p key={i} className="my-2 text-xs text-muted-foreground animate-pulse">Deleting file...</p>;
+                        }
+
+                        if (toolName === 'commitChanges' && toolInput) {
+                          if (toolPart.state === 'output-available' || toolPart.state === 'input-available') {
+                            return (
+                              <div key={i} className="my-2 overflow-hidden max-w-full min-w-0">
+                                <CommitProposal
+                                  message={toolInput.message ?? ''}
+                                  description={toolInput.description}
+                                  status={toolCallStatus ?? 'pending'}
+                                  onAccept={() => {
+                                    navigator.clipboard.writeText(toolInput.message ?? '').catch(() => {});
+                                    toast.success('Commit message copied — use Push button to commit');
+                                    setToolCallStatuses((prev) => ({ ...prev, [toolCallId]: 'accepted' }));
+                                  }}
+                                  onReject={() => {
+                                    setToolCallStatuses((prev) => ({ ...prev, [toolCallId]: 'rejected' }));
+                                  }}
+                                />
+                              </div>
+                            );
+                          }
+                          return <p key={i} className="my-2 text-xs text-muted-foreground animate-pulse">Preparing commit...</p>;
+                        }
+
+                        if (toolName === 'createBranch' && toolInput) {
+                          if (toolPart.state === 'output-available' || toolPart.state === 'input-available') {
+                            return (
+                              <div key={i} className="my-2 overflow-hidden max-w-full min-w-0">
+                                <CreateBranchProposal
+                                  branchName={toolInput.branchName ?? ''}
+                                  sourceBranch={toolInput.sourceBranch}
+                                  status={toolCallStatus ?? 'pending'}
+                                  onAccept={() => {
+                                    navigator.clipboard.writeText(toolInput.branchName ?? '').catch(() => {});
+                                    toast.success('Branch name copied — use branch selector to create');
+                                    setToolCallStatuses((prev) => ({ ...prev, [toolCallId]: 'accepted' }));
+                                  }}
+                                  onReject={() => {
+                                    setToolCallStatuses((prev) => ({ ...prev, [toolCallId]: 'rejected' }));
+                                  }}
+                                />
+                              </div>
+                            );
+                          }
+                          return <p key={i} className="my-2 text-xs text-muted-foreground animate-pulse">Creating branch...</p>;
+                        }
+
+                        if (toolName === 'suggestResponses') {
+                          const toolInputAny = toolPart.input as Record<string, any> | undefined;
+                          const suggestions = toolInputAny?.suggestions as string[] | undefined;
+                          if (suggestions && (toolPart.state === 'output-available' || toolPart.state === 'input-available')) {
+                            return (
+                              <div key={i} className="my-2">
+                                <SuggestResponsesView
+                                  suggestions={suggestions}
+                                  onSelect={(text) => {
+                                    sendMessage({ text });
+                                    setToolCallStatuses((prev) => ({ ...prev, [toolCallId]: 'accepted' }));
+                                  }}
+                                />
+                              </div>
+                            );
+                          }
+                          return null;
+                        }
+
+                        // Server-side tool results (readFile, searchFiles, listFiles, fetchURL, webSearch)
+                        if (toolPart.state === 'output-available') {
+                          const toolOutput = toolPart.output as Record<string, any> | undefined;
+                          if (toolName === 'readFile') {
+                            return (
+                              <div key={i} className="my-2">
+                                <ToolResultDisplay icon={<FileText className="size-3 text-muted-foreground" />} label={`Read ${(toolInput as any)?.path ?? 'file'}`}>
+                                  {toolOutput?.error ? (
+                                    <p className="p-2 text-xs text-red-500">{toolOutput.error}</p>
+                                  ) : (
+                                    <pre className="p-2 text-xs overflow-auto max-h-40"><code>{String(toolOutput?.content ?? '').slice(0, 2000)}{(toolOutput?.content?.length ?? 0) > 2000 ? '...' : ''}</code></pre>
+                                  )}
+                                </ToolResultDisplay>
+                              </div>
+                            );
+                          }
+                          if (toolName === 'searchFiles') {
+                            if (toolOutput?.error) {
+                              return (
+                                <div key={i} className="my-2">
+                                  <ToolResultDisplay icon={<Search className="size-3 text-muted-foreground" />} label="Search failed">
+                                    <p className="p-2 text-xs text-red-500">{toolOutput.error}</p>
+                                  </ToolResultDisplay>
+                                </div>
+                              );
+                            }
+                            const results = (toolOutput?.results ?? []) as { path: string; name: string }[];
+                            // Don't show a big UI for 0-result searches — collapse to a single line
+                            if (results.length === 0) {
+                              return (
+                                <div key={i} className="my-1">
+                                  <p className="text-xs text-muted-foreground/60">No matches for &quot;{(toolInput as any)?.query ?? 'query'}&quot;</p>
+                                </div>
+                              );
+                            }
+                            return (
+                              <div key={i} className="my-2">
+                                <ToolResultDisplay icon={<Search className="size-3 text-muted-foreground" />} label={`Found ${toolOutput?.total ?? 0} results`}>
+                                  <div className="p-2 space-y-0.5">
+                                    {results.map((r, ri) => (
+                                      <p key={ri} className="text-xs font-mono text-muted-foreground truncate">{r.path}</p>
+                                    ))}
+                                  </div>
+                                </ToolResultDisplay>
+                              </div>
+                            );
+                          }
+                          if (toolName === 'listFiles') {
+                            if (toolOutput?.error) {
+                              return (
+                                <div key={i} className="my-2">
+                                  <ToolResultDisplay icon={<FolderOpen className="size-3 text-muted-foreground" />} label="Listing failed">
+                                    <p className="p-2 text-xs text-red-500">{toolOutput.error}</p>
+                                  </ToolResultDisplay>
+                                </div>
+                              );
+                            }
+                            const entries = (toolOutput?.entries ?? []) as { name: string; type: string }[];
+                            return (
+                              <div key={i} className="my-2">
+                                <ToolResultDisplay icon={<FolderOpen className="size-3 text-muted-foreground" />} label={`Listed ${entries.length} items`}>
+                                  <div className="p-2 space-y-0.5">
+                                    {entries.map((e, ei) => (
+                                      <p key={ei} className="text-xs font-mono text-muted-foreground">{e.type === 'dir' ? `${e.name}/` : e.name}</p>
+                                    ))}
+                                  </div>
+                                </ToolResultDisplay>
+                              </div>
+                            );
+                          }
+                          if (toolName === 'fetchURL') {
+                            return (
+                              <div key={i} className="my-2">
+                                <ToolResultDisplay icon={<Link className="size-3 text-muted-foreground" />} label={`Fetched ${(toolInput as any)?.url?.slice(0, 40) ?? 'URL'}...`}>
+                                  {toolOutput?.error ? (
+                                    <p className="p-2 text-xs text-red-500">{toolOutput.error}</p>
+                                  ) : (
+                                    <pre className="p-2 text-xs overflow-auto max-h-40 whitespace-pre-wrap"><code>{String(toolOutput?.content ?? '').slice(0, 1000)}{(toolOutput?.content?.length ?? 0) > 1000 ? '...' : ''}</code></pre>
+                                  )}
+                                </ToolResultDisplay>
+                              </div>
+                            );
+                          }
+                          if (toolName === 'webSearch') {
+                            const results = (toolOutput?.results ?? []) as { title: string; url: string; description?: string }[];
+                            return (
+                              <div key={i} className="my-2">
+                                <ToolResultDisplay icon={<Globe className="size-3 text-muted-foreground" />} label={`Search: ${(toolInput as any)?.query ?? ''}`}>
+                                  <div className="p-2 space-y-1.5">
+                                    {results.map((r, ri) => (
+                                      <div key={ri}>
+                                        <a href={r.url} target="_blank" rel="noopener noreferrer" className="text-xs font-medium text-blue-600 dark:text-blue-400 hover:underline">{r.title || r.url}</a>
+                                        {r.description && <p className="text-xs text-muted-foreground mt-0.5">{r.description}</p>}
+                                      </div>
+                                    ))}
+                                    {results.length === 0 && <p className="text-xs text-muted-foreground">{toolOutput?.note ?? 'No results'}</p>}
+                                  </div>
+                                </ToolResultDisplay>
+                              </div>
+                            );
+                          }
+                          if (toolName === 'getBranches') {
+                            if (toolOutput?.error) {
+                              return (
+                                <div key={i} className="my-2">
+                                  <ToolResultDisplay icon={<GitBranch className="size-3 text-muted-foreground" />} label="Branches failed">
+                                    <p className="p-2 text-xs text-red-500">{toolOutput.error}</p>
+                                  </ToolResultDisplay>
+                                </div>
+                              );
+                            }
+                            const branches = (toolOutput?.branches ?? []) as { name: string; protected: boolean }[];
+                            return (
+                              <div key={i} className="my-2">
+                                <ToolResultDisplay icon={<GitBranch className="size-3 text-muted-foreground" />} label={`${branches.length} branches`}>
+                                  <div className="p-2 space-y-0.5">
+                                    {branches.map((b, bi) => (
+                                      <p key={bi} className="text-xs font-mono text-muted-foreground">
+                                        {b.name === toolOutput?.currentBranch ? <span className="text-green-600">{b.name} (current)</span> : b.name}
+                                        {b.protected && <span className="ml-1 text-amber-500">protected</span>}
+                                      </p>
+                                    ))}
+                                  </div>
+                                </ToolResultDisplay>
+                              </div>
+                            );
+                          }
+                          if (toolName === 'getCollaborators') {
+                            if (toolOutput?.error) {
+                              return (
+                                <div key={i} className="my-2">
+                                  <ToolResultDisplay icon={<Users className="size-3 text-muted-foreground" />} label="Collaborators failed">
+                                    <p className="p-2 text-xs text-red-500">{toolOutput.error}</p>
+                                  </ToolResultDisplay>
+                                </div>
+                              );
+                            }
+                            const collaborators = (toolOutput?.collaborators ?? []) as { login: string; role?: string; contributions?: number }[];
+                            return (
+                              <div key={i} className="my-2">
+                                <ToolResultDisplay icon={<Users className="size-3 text-muted-foreground" />} label={`${collaborators.length} collaborators`}>
+                                  <div className="p-2 space-y-0.5">
+                                    {collaborators.map((c, ci) => (
+                                      <p key={ci} className="text-xs text-muted-foreground">
+                                        <span className="font-mono font-medium">{c.login}</span>
+                                        {c.role && <span className="ml-1 text-muted-foreground/60">({c.role})</span>}
+                                      </p>
+                                    ))}
+                                  </div>
+                                </ToolResultDisplay>
+                              </div>
+                            );
+                          }
+                        }
+
+                        // Loading state for server-side tools (both streaming input and executing)
+                        if (toolPart.state === 'input-streaming' || toolPart.state === 'input-available') {
+                          const loadingLabels: Record<string, string> = {
+                            readFile: 'Reading file...',
+                            searchFiles: 'Searching...',
+                            listFiles: 'Listing files...',
+                            fetchURL: 'Fetching URL...',
+                            webSearch: 'Searching the web...',
+                            getBranches: 'Loading branches...',
+                            getCollaborators: 'Loading collaborators...',
+                          };
+                          const label = loadingLabels[toolName ?? ''];
+                          if (label) {
+                            return <p key={i} className="my-2 text-xs text-muted-foreground animate-pulse">{label}</p>;
+                          }
+                        }
+
+                        // Fallback for unknown tools
                         return (
                           <div key={i} className="my-2 rounded-md border bg-muted/50 p-2 text-xs">
                             <div className="flex items-center gap-1.5 font-medium text-muted-foreground">
@@ -815,40 +1490,68 @@ export function AISidebar({ isOpen, onClose }: AISidebarProps) {
                       const pending = getPendingEditIds(message);
                       if (pending.length < 2) return null;
                       return (
-                        <div className="mt-3 flex items-center justify-between rounded-md border bg-background/60 px-2.5 py-1.5">
-                          <span className="text-[11px] text-muted-foreground">
+                        <div className="mt-4 flex items-center justify-between rounded-md border bg-background/60 px-3 py-2">
+                          <span className="text-xs text-muted-foreground">
                             {pending.length} edits pending
                           </span>
-                          <div className="flex gap-1.5">
+                          <div className="flex gap-1">
                             <Button
-                              variant="outline"
+                              variant="ghost"
                               size="sm"
-                              className="h-6 text-[11px] px-2"
                               onClick={() => handleRejectAll(message)}
+                              className="h-6 text-[11px] px-2"
+                              aria-label={`Dismiss all ${pending.length} edits (Cmd+Shift+N)`}
                             >
-                              <XCircle className="mr-1 h-3 w-3" />
-                              Reject all
+                              <X className="h-3 w-3 mr-1" />
+                              Dismiss all
+                              <span className="-ml-0.5 font-normal opacity-60" aria-hidden="true">{'\u2318\u21E7'}N</span>
                             </Button>
                             <Button
                               size="sm"
-                              className="h-6 text-[11px] px-2 bg-green-600 hover:bg-green-700 text-white"
                               onClick={() => handleAcceptAll(message)}
+                              className="h-6 text-[11px] px-2"
+                              aria-label={`Keep all ${pending.length} edits (Cmd+Shift+Y)`}
                             >
-                              <CheckCheck className="mr-1 h-3 w-3" />
-                              Accept all
+                              <Check className="h-3 w-3 mr-1" />
+                              Keep all
+                              <span className="-ml-0.5 font-normal opacity-60" aria-hidden="true">{'\u2318\u21E7'}Y</span>
                             </Button>
                           </div>
                         </div>
                       );
                     })()}
                   </div>
+                  {message.role === 'user' && (
+                    <UserMessageAvatar photoURL={user?.photoURL} />
+                  )}
                 </div>
               ))}
               {isLoading && messages[messages.length - 1]?.role !== 'assistant' && (
-                <p className="px-1 py-2 text-sm text-muted-foreground animate-pulse">Thinking...</p>
+                <p className="px-1 py-2 text-sm text-muted-foreground animate-pulse" role="status" aria-live="polite">Thinking...</p>
               )}
             </div>
+            {/* Scroll sentinel — scrollIntoView target for auto-scroll */}
+            <div ref={messagesEndRef} />
+            {/* ARIA live region for screen readers */}
+            <div className="sr-only" aria-live="assertive" aria-atomic="true">
+              {isLoading ? 'AI is generating a response' : ''}
+            </div>
           </ScrollArea>
+          </ChatErrorBoundary>
+
+          {/* ── Revert all AI edits ────────────────────────────────── */}
+          {aiEditSnapshots.length > 0 && (
+            <div className="mx-3 mb-1">
+              <button
+                onClick={handleRevertAll}
+                className="flex w-full items-center justify-center gap-1.5 rounded-md border border-dashed px-2 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:border-foreground/30 hover:bg-accent/50 active:scale-[0.99] transition-all"
+                aria-label={`Revert all ${aiEditSnapshots.length} AI edits`}
+              >
+                <RotateCcw className="h-3 w-3" />
+                Revert all AI edits ({aiEditSnapshots.length})
+              </button>
+            </div>
+          )}
 
           {/* ── Error banner ────────────────────────────────────────── */}
           {errorMessage && (
@@ -861,50 +1564,45 @@ export function AISidebar({ isOpen, onClose }: AISidebarProps) {
             </div>
           )}
 
-          {/* ── Suggestions (no border, 1 per row) ────────────────── */}
-          {messages.length === 0 && !errorMessage && (
-            <div className="px-3 py-2">
-              <div className="flex flex-col gap-1.5">
-                {suggestions.map((s) => (
-                  <button
-                    key={s}
-                    onClick={() => sendMessage({ text: s })}
-                    className="rounded-full border bg-background px-2.5 py-1 text-[11px] text-left hover:bg-accent transition-colors"
-                  >
-                    {s}
-                  </button>
-                ))}
-              </div>
-            </div>
+          </>
           )}
 
           {/* ── Context file badges (above input) ─────────────────── */}
           <div className="flex items-center gap-1 flex-wrap px-3 pt-2">
-            {currentFile && (
-              <Badge variant="secondary" className="gap-1 text-[10px] shrink-0">
-                <FileText className="h-2.5 w-2.5" />
+            {currentFile && !excludeCurrentFile && (
+              <Badge variant="secondary" className="gap-1 pr-1 text-xs shrink-0">
+                <FileText className="h-3 w-3" />
                 {currentFile.name}
+                <button
+                  type="button"
+                  onClick={() => setExcludeCurrentFile(true)}
+                  className="ml-0.5 rounded-full hover:bg-muted-foreground/20"
+                >
+                  <X className="h-3 w-3" />
+                </button>
               </Badge>
             )}
             {extraMentionedFiles.map((file) => (
               <Badge
                 key={file.path}
                 variant="secondary"
-                className="gap-1 pr-1 text-[10px] shrink-0"
+                className="gap-1 pr-1 text-xs shrink-0"
               >
-                <FileText className="h-2.5 w-2.5" />
+                <FileText className="h-3 w-3" />
                 {file.name}
                 <button
                   type="button"
                   onClick={() => removeMentionedFile(file.path)}
                   className="ml-0.5 rounded-full hover:bg-muted-foreground/20"
                 >
-                  <X className="h-2.5 w-2.5" />
+                  <X className="h-3 w-3" />
                 </button>
               </Badge>
             ))}
             <button
               type="button"
+              data-testid="ai-add-context"
+              aria-label="Add file context to AI conversation"
               className="flex h-5 w-5 items-center justify-center rounded-md hover:bg-accent transition-colors shrink-0"
               onClick={openMentionPicker}
               title="Add file context"
@@ -918,10 +1616,12 @@ export function AISidebar({ isOpen, onClose }: AISidebarProps) {
             <div className="relative rounded-md border bg-background focus-within:ring-1 focus-within:ring-ring">
               <Textarea
                 ref={textareaRef}
+                data-testid="ai-chat-input"
+                aria-label="Message for AI assistant"
                 value={input}
                 onChange={handleInputChange}
                 onKeyDown={handleKeyDown}
-                placeholder="Ask AI about your document..."
+                placeholder="Ask AI about your file..."
                 className="min-h-[60px] resize-none border-0 pr-16 pb-2 text-sm shadow-none focus-visible:ring-0"
               />
 
@@ -931,6 +1631,8 @@ export function AISidebar({ isOpen, onClose }: AISidebarProps) {
                   type="button"
                   variant="ghost"
                   size="icon"
+                  data-testid="ai-mic-button"
+                  aria-label={isListening ? "Stop voice input" : "Start voice input"}
                   className="h-7 w-7 rounded-lg"
                   onClick={toggleListening}
                 >
@@ -943,6 +1645,8 @@ export function AISidebar({ isOpen, onClose }: AISidebarProps) {
                 <Button
                   type="submit"
                   size="icon"
+                  data-testid="ai-send-button"
+                  aria-label={isLoading ? "AI is generating a response" : "Send message to AI"}
                   className="h-7 w-7 rounded-lg"
                   disabled={isLoading || !input.trim()}
                 >
@@ -974,7 +1678,7 @@ export function AISidebar({ isOpen, onClose }: AISidebarProps) {
                     >
                       <FileText className="h-3 w-3 shrink-0 text-muted-foreground" />
                       <span className="truncate font-medium">{file.name}</span>
-                      <span className="ml-auto truncate text-[10px] text-muted-foreground">
+                      <span className="ml-auto truncate text-xs text-muted-foreground">
                         {file.path}
                       </span>
                     </button>
@@ -1024,6 +1728,6 @@ export function AISidebar({ isOpen, onClose }: AISidebarProps) {
           </form>
         </>
       )}
-    </div>
+    </aside>
   );
 }

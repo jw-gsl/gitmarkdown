@@ -6,24 +6,20 @@ import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import { useState, useEffect, useRef, useCallback } from 'react';
 
-interface SelectionData {
+export interface SelectionData {
   text: string;
   from: number;
   to: number;
 }
 
 interface EditorBubbleMenuProps {
-  editor: Editor;
+  /** Tiptap editor instance (markdown mode) */
+  editor?: Editor;
+  /** Container element ref (generic text mode — code viewer, etc.) */
+  containerRef?: React.RefObject<HTMLElement | null>;
   onEdit?: (data: SelectionData) => void;
   onChat?: (data: SelectionData) => void;
   onComment?: (data: SelectionData) => void;
-}
-
-function getSelectionData(editor: Editor): SelectionData | null {
-  const { from, to } = editor.state.selection;
-  if (from === to) return null;
-  const text = editor.state.doc.textBetween(from, to, ' ');
-  return { text, from, to };
 }
 
 /** Threshold in px: if the selection rect top is less than this, flip menu below */
@@ -31,120 +27,200 @@ const FLIP_THRESHOLD = 80;
 /** Gap between the selection and the menu */
 const MENU_GAP = 8;
 
-export function EditorBubbleMenu({ editor, onEdit, onChat, onComment }: EditorBubbleMenuProps) {
+/** Get selection data from a Tiptap editor */
+function getEditorSelectionData(editor: Editor): SelectionData | null {
+  const { from, to } = editor.state.selection;
+  if (from === to) return null;
+  const text = editor.state.doc.textBetween(from, to, ' ');
+  return { text, from, to };
+}
+
+/** Get selection data from a native textarea */
+function getTextareaSelectionData(textarea: HTMLTextAreaElement): SelectionData | null {
+  const { selectionStart, selectionEnd, value } = textarea;
+  if (selectionStart === selectionEnd) return null;
+  return { text: value.substring(selectionStart, selectionEnd), from: selectionStart, to: selectionEnd };
+}
+
+/** Get selection data from a native DOM selection within a container */
+function getDomSelectionData(container: HTMLElement): SelectionData | null {
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return null;
+  const range = sel.getRangeAt(0);
+  if (!container.contains(range.commonAncestorContainer)) return null;
+  const text = sel.toString();
+  if (!text.trim()) return null;
+  // Calculate character offset within the container's text content
+  const preRange = document.createRange();
+  preRange.setStart(container, 0);
+  preRange.setEnd(range.startContainer, range.startOffset);
+  const from = preRange.toString().length;
+  return { text, from, to: from + text.length };
+}
+
+export function EditorBubbleMenu({ editor, containerRef, onEdit, onChat, onComment }: EditorBubbleMenuProps) {
   const [visible, setVisible] = useState(false);
   const [position, setPosition] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
-  const [placement, setPlacement] = useState<'above' | 'below'>('above');
   const menuRef = useRef<HTMLDivElement>(null);
+  const selectionRef = useRef<SelectionData | null>(null);
+  const lastMousePos = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
 
-  const updatePosition = useCallback(() => {
-    const { from, to } = editor.state.selection;
-    if (from === to) {
-      setVisible(false);
-      return;
-    }
-
-    // Get the DOM selection rect
-    const domSelection = window.getSelection();
-    if (!domSelection || domSelection.rangeCount === 0) {
-      setVisible(false);
-      return;
-    }
-
-    const range = domSelection.getRangeAt(0);
-    const selectionRect = range.getBoundingClientRect();
-
-    // If the rect has no dimensions, the selection isn't visible
-    if (selectionRect.width === 0 && selectionRect.height === 0) {
-      setVisible(false);
-      return;
-    }
-
+  // ── Positioning helper ──────────────────────────────────────────────
+  const positionMenu = useCallback((rect: { top: number; bottom: number; left: number; width: number }) => {
     const menuEl = menuRef.current;
     const menuHeight = menuEl ? menuEl.offsetHeight : 40;
     const menuWidth = menuEl ? menuEl.offsetWidth : 300;
 
-    // Determine placement: above or below
-    const spaceAbove = selectionRect.top;
+    const spaceAbove = rect.top;
     const shouldFlip = spaceAbove - menuHeight - MENU_GAP < FLIP_THRESHOLD;
+    const top = shouldFlip
+      ? rect.bottom + MENU_GAP
+      : rect.top - menuHeight - MENU_GAP;
 
-    let top: number;
-    if (shouldFlip) {
-      // Place below the selection
-      top = selectionRect.bottom + MENU_GAP;
-      setPlacement('below');
-    } else {
-      // Place above the selection
-      top = selectionRect.top - menuHeight - MENU_GAP;
-      setPlacement('above');
-    }
-
-    // Center horizontally on the selection, but keep within viewport
-    let left = selectionRect.left + selectionRect.width / 2 - menuWidth / 2;
+    let left = rect.left + rect.width / 2 - menuWidth / 2;
     left = Math.max(8, Math.min(left, window.innerWidth - menuWidth - 8));
 
     setPosition({ top, left });
+  }, []);
+
+  // ── Tiptap mode ─────────────────────────────────────────────────────
+  const updateTiptapPosition = useCallback(() => {
+    if (!editor) return;
+    const { from, to } = editor.state.selection;
+    if (from === to) { setVisible(false); return; }
+
+    const domSelection = window.getSelection();
+    if (!domSelection || domSelection.rangeCount === 0) { setVisible(false); return; }
+
+    const range = domSelection.getRangeAt(0);
+    const selectionRect = range.getBoundingClientRect();
+    if (selectionRect.width === 0 && selectionRect.height === 0) { setVisible(false); return; }
+
+    positionMenu(selectionRect);
+    selectionRef.current = getEditorSelectionData(editor);
     setVisible(true);
-  }, [editor]);
+  }, [editor, positionMenu]);
 
   useEffect(() => {
-    // Listen for selection updates from the editor
-    const onSelectionUpdate = () => {
-      // Use requestAnimationFrame to let the DOM settle
-      requestAnimationFrame(updatePosition);
-    };
-
+    if (!editor) return;
+    const onSelectionUpdate = () => requestAnimationFrame(updateTiptapPosition);
     const onBlur = () => setVisible(false);
-
     editor.on('selectionUpdate', onSelectionUpdate);
     editor.on('blur', onBlur);
-
     return () => {
       editor.off('selectionUpdate', onSelectionUpdate);
       editor.off('blur', onBlur);
     };
-  }, [editor, updatePosition]);
+  }, [editor, updateTiptapPosition]);
 
-  // Also reposition on scroll/resize while visible
+  // ── Generic text mode ───────────────────────────────────────────────
+  const updateGenericSelection = useCallback(() => {
+    const container = containerRef?.current;
+    if (!container) return;
+
+    // Check textarea first
+    const textarea = container.querySelector('textarea');
+    if (textarea && document.activeElement === textarea) {
+      const data = getTextareaSelectionData(textarea);
+      if (data) {
+        positionMenu({
+          top: lastMousePos.current.y - 10,
+          bottom: lastMousePos.current.y + 10,
+          left: lastMousePos.current.x - 50,
+          width: 100,
+        });
+        selectionRef.current = data;
+        setVisible(true);
+        return;
+      }
+    }
+
+    // Check DOM selection (readonly <pre>)
+    const data = getDomSelectionData(container);
+    if (data) {
+      const sel = window.getSelection()!;
+      const range = sel.getRangeAt(0);
+      positionMenu(range.getBoundingClientRect());
+      selectionRef.current = data;
+      setVisible(true);
+      return;
+    }
+
+    setVisible(false);
+    selectionRef.current = null;
+  }, [containerRef, positionMenu]);
+
+  useEffect(() => {
+    const container = containerRef?.current;
+    if (!container) return;
+
+    const onMouseUp = (e: MouseEvent) => {
+      lastMousePos.current = { x: e.clientX, y: e.clientY };
+      setTimeout(updateGenericSelection, 10);
+    };
+
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.shiftKey || e.key === 'Shift') {
+        updateGenericSelection();
+      }
+    };
+
+    const onMouseDown = () => setVisible(false);
+
+    container.addEventListener('mouseup', onMouseUp);
+    container.addEventListener('keyup', onKeyUp);
+    container.addEventListener('mousedown', onMouseDown);
+    return () => {
+      container.removeEventListener('mouseup', onMouseUp);
+      container.removeEventListener('keyup', onKeyUp);
+      container.removeEventListener('mousedown', onMouseDown);
+    };
+  }, [containerRef, updateGenericSelection]);
+
+  // ── Reposition on scroll/resize ─────────────────────────────────────
   useEffect(() => {
     if (!visible) return;
-
-    const onScrollOrResize = () => {
-      requestAnimationFrame(updatePosition);
+    const handler = () => {
+      requestAnimationFrame(editor ? updateTiptapPosition : updateGenericSelection);
     };
-
-    window.addEventListener('scroll', onScrollOrResize, true);
-    window.addEventListener('resize', onScrollOrResize);
-
+    window.addEventListener('scroll', handler, true);
+    window.addEventListener('resize', handler);
     return () => {
-      window.removeEventListener('scroll', onScrollOrResize, true);
-      window.removeEventListener('resize', onScrollOrResize);
+      window.removeEventListener('scroll', handler, true);
+      window.removeEventListener('resize', handler);
     };
-  }, [visible, updatePosition]);
+  }, [visible, editor, updateTiptapPosition, updateGenericSelection]);
 
+  // ── Action handlers ─────────────────────────────────────────────────
   const handleEdit = () => {
-    const data = getSelectionData(editor);
+    const data = editor ? getEditorSelectionData(editor) : selectionRef.current;
     if (!data) return;
-    editor.chain().setHighlight({ color: '#FEF9C3' }).run();
+    if (editor) {
+      editor.chain().setHighlight({ color: '#FEF9C3' }).run();
+      editor.commands.setTextSelection(data.to);
+    }
     onEdit?.(data);
-    editor.commands.setTextSelection(data.to);
     setVisible(false);
   };
 
   const handleChat = () => {
-    const data = getSelectionData(editor);
+    const data = editor ? getEditorSelectionData(editor) : selectionRef.current;
     if (!data) return;
+    if (editor) {
+      editor.commands.setTextSelection(data.to);
+    }
     onChat?.(data);
-    editor.commands.setTextSelection(data.to);
     setVisible(false);
   };
 
   const handleComment = () => {
-    const data = getSelectionData(editor);
+    const data = editor ? getEditorSelectionData(editor) : selectionRef.current;
     if (!data) return;
-    editor.chain().setHighlight({ color: '#FEF9C3' }).run();
+    if (editor) {
+      editor.chain().setHighlight({ color: '#FEF9C3' }).run();
+      editor.commands.setTextSelection(data.to);
+    }
     onComment?.(data);
-    editor.commands.setTextSelection(data.to);
     setVisible(false);
   };
 
@@ -158,13 +234,17 @@ export function EditorBubbleMenu({ editor, onEdit, onChat, onComment }: EditorBu
         top: `${position.top}px`,
         left: `${position.left}px`,
       }}
-      // Prevent clicks on the menu from blurring the editor
       onMouseDown={(e) => e.preventDefault()}
+      data-testid="bubble-menu"
+      role="toolbar"
+      aria-label="Text actions for selected text"
     >
       <Button
         variant="ghost"
         className="text-sm gap-1.5 px-2.5 py-1.5 h-auto"
         onClick={handleEdit}
+        data-testid="bubble-edit"
+        aria-label="Edit selected text with AI"
       >
         <Pencil className="h-3.5 w-3.5" />
         Edit
@@ -175,6 +255,8 @@ export function EditorBubbleMenu({ editor, onEdit, onChat, onComment }: EditorBu
         variant="ghost"
         className="text-sm gap-1.5 px-2.5 py-1.5 h-auto"
         onClick={handleChat}
+        data-testid="bubble-chat"
+        aria-label="Chat about selected text with AI"
       >
         <MessageCircle className="h-3.5 w-3.5" />
         Chat
@@ -185,6 +267,8 @@ export function EditorBubbleMenu({ editor, onEdit, onChat, onComment }: EditorBu
         variant="ghost"
         className="text-sm gap-1.5 px-2.5 py-1.5 h-auto"
         onClick={handleComment}
+        data-testid="bubble-comment"
+        aria-label="Add comment on selected text"
       >
         <MessageSquarePlus className="h-3.5 w-3.5" />
         Comment

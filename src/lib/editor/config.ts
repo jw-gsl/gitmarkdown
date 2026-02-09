@@ -18,8 +18,9 @@ import Superscript from '@tiptap/extension-superscript';
 import { TextStyle } from '@tiptap/extension-text-style';
 import Color from '@tiptap/extension-color';
 import { common, createLowlight } from 'lowlight';
+import { GhostText } from './ghost-text';
 
-const lowlight = createLowlight(common);
+export const lowlight = createLowlight(common);
 
 export function getEditorExtensions(options?: { placeholder?: string }) {
   return [
@@ -52,5 +53,6 @@ export function getEditorExtensions(options?: { placeholder?: string }) {
     Superscript,
     TextStyle,
     Color,
+    GhostText,
   ];
 }

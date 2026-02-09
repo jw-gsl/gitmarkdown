@@ -1,7 +1,8 @@
 import type { Metadata } from 'next';
 import { Geist, Geist_Mono } from 'next/font/google';
 import { ThemeProvider } from 'next-themes';
-import { Toaster } from 'sonner';
+import { ThemedToaster } from '@/components/ui/themed-toaster';
+import { CodeThemeStyle } from '@/components/editor/code-theme-style';
 import './globals.css';
 
 const geistSans = Geist({
@@ -27,10 +28,28 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" suppressHydrationWarning>
+      <head>
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{
+            __html: JSON.stringify({
+              "@context": "https://schema.org",
+              "@type": "WebApplication",
+              "name": "GitMarkdown",
+              "description": "Collaborative markdown editor with GitHub sync",
+              "applicationCategory": "DeveloperApplication",
+              "operatingSystem": "Web",
+              "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+              "featureList": ["GitHub sync", "Real-time collaboration", "AI editing", "Inline comments", "Version history"]
+            })
+          }}
+        />
+      </head>
       <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
         <ThemeProvider attribute="class" defaultTheme="light" enableSystem disableTransitionOnChange>
           {children}
-          <Toaster position="bottom-right" />
+          <CodeThemeStyle />
+          <ThemedToaster />
         </ThemeProvider>
       </body>
     </html>

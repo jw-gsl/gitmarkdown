@@ -87,7 +87,10 @@ export function VersionHistory({ commits, loading, onSelectCommit, selectedSha, 
                 key={commit.sha}
                 role="button"
                 tabIndex={0}
-                className={`group relative flex w-full gap-2.5 rounded-lg p-2.5 text-left transition-colors cursor-pointer ${
+                data-testid={`commit-entry-${commit.sha.slice(0, 7)}`}
+                aria-label={`Commit ${commit.sha.slice(0, 7)}: ${commit.message.split('\n')[0]}`}
+                aria-selected={isSelected}
+                className={`group relative flex w-full gap-2.5 overflow-hidden rounded-lg p-2.5 text-left transition-colors cursor-pointer ${
                   isSelected ? 'bg-accent ring-1 ring-primary/30' : 'hover:bg-accent/50'
                 }`}
                 onClick={() => onSelectCommit(commit.sha)}
@@ -105,10 +108,10 @@ export function VersionHistory({ commits, loading, onSelectCommit, selectedSha, 
                   </AvatarFallback>
                 </Avatar>
 
-                <div className="flex-1 min-w-0 overflow-hidden">
-                  <p className="text-xs font-medium truncate">{commit.message.split('\n')[0]}</p>
-                  <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-muted-foreground">
-                    <span className="truncate">{commit.author.login || commit.author.name}</span>
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-medium break-words">{commit.message.split('\n')[0]}</p>
+                  <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-muted-foreground">
+                    <span className="truncate max-w-[100px]">{commit.author.login || commit.author.name}</span>
                     <span className="shrink-0">{formatDate(commit.author.date)}</span>
                     <a
                       href={commit.html_url || `https://github.com/${owner}/${repo}/commit/${commit.sha}`}
@@ -117,13 +120,13 @@ export function VersionHistory({ commits, loading, onSelectCommit, selectedSha, 
                       onClick={(e) => e.stopPropagation()}
                       className="shrink-0"
                     >
-                      <Badge variant="outline" className="text-[10px] font-mono px-1 py-0 h-4 hover:bg-primary hover:text-primary-foreground transition-colors cursor-pointer">
+                      <Badge variant="outline" className="text-xs font-mono px-1 py-0 h-4 hover:bg-primary hover:text-primary-foreground transition-colors cursor-pointer">
                         {commit.sha.slice(0, 7)}
                       </Badge>
                     </a>
                   </div>
                   {commit.stats && (
-                    <div className="mt-0.5 flex items-center gap-2 text-[10px]">
+                    <div className="mt-0.5 flex items-center gap-2 text-xs">
                       <span className="flex items-center gap-0.5 text-green-600 dark:text-green-400">
                         <Plus className="h-2.5 w-2.5" />
                         {commit.stats.additions}
@@ -132,24 +135,22 @@ export function VersionHistory({ commits, loading, onSelectCommit, selectedSha, 
                         <Minus className="h-2.5 w-2.5" />
                         {commit.stats.deletions}
                       </span>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        data-testid={`restore-commit-${commit.sha.slice(0, 7)}`}
+                        aria-label={`Restore to commit ${commit.sha.slice(0, 7)}`}
+                        className="ml-auto h-5 w-5 opacity-0 transition-opacity group-hover:opacity-100"
+                        title="Restore this version"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setRestoreTarget({ sha: commit.sha, message: commit.message.split('\n')[0] });
+                        }}
+                      >
+                        <RotateCcw className="h-3 w-3" />
+                      </Button>
                     </div>
                   )}
-                </div>
-
-                {/* Restore button on hover */}
-                <div className="flex shrink-0 items-center opacity-0 transition-opacity group-hover:opacity-100">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-6 px-2 text-[10px] gap-1"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setRestoreTarget({ sha: commit.sha, message: commit.message.split('\n')[0] });
-                    }}
-                  >
-                    <RotateCcw className="h-3 w-3" />
-                    Restore
-                  </Button>
                 </div>
               </div>
             );

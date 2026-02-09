@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useRef, useEffect } from 'react';
+import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { GitBranch, Check, Plus, Search } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -24,6 +24,7 @@ export function BranchSelector({ onBranchChange, onCreateBranch }: BranchSelecto
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
   const [pendingBranch, setPendingBranch] = useState<string | null>(null);
+  const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Focus search input when popover opens
@@ -32,8 +33,14 @@ export function BranchSelector({ onBranchChange, onCreateBranch }: BranchSelecto
       setTimeout(() => inputRef.current?.focus(), 0);
     } else {
       setSearch('');
+      setSelectedIndex(0);
     }
   }, [open]);
+
+  // Reset selectedIndex when search changes
+  useEffect(() => {
+    setSelectedIndex(0);
+  }, [search]);
 
   const filteredBranches = useMemo(() => {
     if (!search.trim()) return branches;
@@ -67,6 +74,24 @@ export function BranchSelector({ onBranchChange, onCreateBranch }: BranchSelecto
     onCreateBranch();
   };
 
+  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setSelectedIndex((prev) => Math.min(prev + 1, filteredBranches.length - 1));
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setSelectedIndex((prev) => Math.max(prev - 1, 0));
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (filteredBranches[selectedIndex]) {
+        handleSelect(filteredBranches[selectedIndex]);
+      }
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      setOpen(false);
+    }
+  }, [filteredBranches, selectedIndex, handleSelect]);
+
   return (
     <>
       <Popover open={open} onOpenChange={setOpen}>
@@ -74,9 +99,9 @@ export function BranchSelector({ onBranchChange, onCreateBranch }: BranchSelecto
           <Tooltip>
             <TooltipTrigger asChild>
               <PopoverTrigger asChild>
-                <button className="flex items-center gap-1 text-sm hover:text-muted-foreground transition-colors shrink-0">
+                <button data-testid="branch-selector" aria-label={`Current branch: ${currentBranch}. Click to switch branches`} className="flex items-center gap-1 text-sm hover:text-muted-foreground transition-colors cursor-pointer shrink-0">
                   <GitBranch className="h-3.5 w-3.5" />
-                  <span className="max-w-[100px] sm:max-w-[140px] truncate">{currentBranch}</span>
+                  <span className="max-w-[140px] sm:max-w-[200px] truncate">{currentBranch}</span>
                 </button>
               </PopoverTrigger>
             </TooltipTrigger>
@@ -91,8 +116,11 @@ export function BranchSelector({ onBranchChange, onCreateBranch }: BranchSelecto
             <Search className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
             <input
               ref={inputRef}
+              data-testid="branch-search"
+              aria-label="Search branches"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
+              onKeyDown={handleKeyDown}
               placeholder="Find a branch..."
               className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
             />
@@ -105,11 +133,14 @@ export function BranchSelector({ onBranchChange, onCreateBranch }: BranchSelecto
                 No branches found
               </div>
             ) : (
-              filteredBranches.map((branch) => (
+              filteredBranches.map((branch, index) => (
                 <button
                   key={branch}
+                  data-testid={`branch-item-${branch}`}
+                  aria-label={`Switch to branch ${branch}`}
+                  aria-current={branch === currentBranch ? 'true' : undefined}
                   onClick={() => handleSelect(branch)}
-                  className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm hover:bg-accent transition-colors"
+                  className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm hover:bg-accent transition-colors ${index === selectedIndex ? 'bg-accent' : ''}`}
                 >
                   <span className="w-4 shrink-0">
                     {branch === currentBranch && <Check className="h-3.5 w-3.5 text-primary" />}
@@ -123,6 +154,8 @@ export function BranchSelector({ onBranchChange, onCreateBranch }: BranchSelecto
           {/* Create new branch */}
           <div className="border-t px-1 py-1">
             <button
+              data-testid="new-branch-button"
+              aria-label="Create new branch"
               onClick={handleCreate}
               className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm hover:bg-accent transition-colors"
             >

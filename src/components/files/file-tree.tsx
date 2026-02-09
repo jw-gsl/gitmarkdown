@@ -26,11 +26,19 @@ import {
   FilePlus,
   FolderPlus,
   Upload,
+  ExternalLink,
+  ClipboardCopy,
 } from 'lucide-react';
 import JSZip from 'jszip';
+import { useRouter } from 'next/navigation';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/components/ui/popover';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -38,10 +46,19 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from '@/components/ui/context-menu';
 import { useFileStore } from '@/stores/file-store';
 import { useSyncStore } from '@/stores/sync-store';
 import { useAuth } from '@/providers/auth-provider';
-import type { FileNode } from '@/types';
+import { useGitHubRepos } from '@/hooks/use-github';
+import { CreateRepoDialog } from '@/components/github/create-repo-dialog';
+import type { FileNode, GitHubRepo } from '@/types';
 
 import { toast } from 'sonner';
 
@@ -99,6 +116,18 @@ function collectAllPaths(nodes: FileNode[]): Set<string> {
 
 const INVALID_FILENAME_CHARS = /[\\:*?"<>|]/;
 
+/** Flatten the visible tree (respecting expanded state) into an ordered list */
+function flattenVisibleNodes(nodes: FileNode[], expandedDirs: Set<string>): FileNode[] {
+  const result: FileNode[] = [];
+  for (const node of nodes) {
+    result.push(node);
+    if (node.type === 'directory' && expandedDirs.has(node.path) && node.children) {
+      result.push(...flattenVisibleNodes(node.children, expandedDirs));
+    }
+  }
+  return result;
+}
+
 interface FileTreeItemProps {
   node: FileNode;
   depth: number;
@@ -106,23 +135,48 @@ interface FileTreeItemProps {
   onDuplicate?: (node: FileNode) => void;
   onRename?: (node: FileNode, newName: string) => void;
   onDelete?: (node: FileNode) => void;
+  onMoveFile?: (node: FileNode, targetDir: string) => void;
   busyPaths?: Set<string>;
+  focusedPath?: string | null;
 }
 
-function FileTreeItem({ node, depth, onSelect, onDuplicate, onRename, onDelete, busyPaths }: FileTreeItemProps) {
+function FileTreeItem({ node, depth, onSelect, onDuplicate, onRename, onDelete, onMoveFile, busyPaths, focusedPath }: FileTreeItemProps) {
   const { expandedDirs, toggleDir, currentFile } = useFileStore();
+  const pendingOps = useFileStore((s) => s.pendingOps);
+  const isDirty = useFileStore((s) => s.dirtyFiles.has(node.path));
   const isExpanded = expandedDirs.has(node.path);
   const isSelected = currentFile?.path === node.path;
+  const isFocused = focusedPath === node.path;
   const isDir = node.type === 'directory';
   const isMd = node.isMarkdown;
   const isBusy = busyPaths?.has(node.path) ?? false;
+
+  const pendingStatus = useMemo(() => {
+    for (const op of pendingOps) {
+      if (op.type === 'delete' && op.path === node.path) return 'deleted';
+      if (op.type === 'create' && op.path === node.path) return 'created';
+      if (op.type === 'duplicate' && op.newPath === node.path) return 'created';
+      if (op.type === 'rename' && op.newPath === node.path) return 'renamed';
+      if (op.type === 'move' && op.newPath === node.path) return 'moved';
+    }
+    return null;
+  }, [pendingOps, node.path]);
 
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState(node.name);
   const [menuOpen, setMenuOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [confirmDeleteCtx, setConfirmDeleteCtx] = useState(false);
   const renameInputRef = useRef<HTMLInputElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
   const clickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Auto-scroll selected file into view on mount
+  useEffect(() => {
+    if (isSelected && buttonRef.current) {
+      buttonRef.current.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
+  }, [isSelected]);
 
   useEffect(() => {
     if (isRenaming) {
@@ -181,16 +235,93 @@ function FileTreeItem({ node, depth, onSelect, onDuplicate, onRename, onDelete, 
     [commitRename, node.name]
   );
 
+  const params = useParams();
+  const owner = params.owner as string;
+  const repo = params.repo as string;
+  const { currentBranch } = useSyncStore();
+
+  const handleCopyPath = useCallback(() => {
+    navigator.clipboard.writeText(node.path);
+    toast.success('Path copied');
+  }, [node.path]);
+
+  const handleOpenOnGitHub = useCallback(() => {
+    const branch = currentBranch || 'main';
+    const type = isDir ? 'tree' : 'blob';
+    window.open(`https://github.com/${owner}/${repo}/${type}/${branch}/${node.path}`, '_blank');
+  }, [owner, repo, currentBranch, node.path, isDir]);
+
+  // Drag-to-move state
+  const [isDragOverDir, setIsDragOverDir] = useState(false);
+
+  const handleDragStartItem = useCallback((e: React.DragEvent) => {
+    if (isDir || isBusy) { e.preventDefault(); return; }
+    e.dataTransfer.setData('text/x-file-path', node.path);
+    e.dataTransfer.effectAllowed = 'move';
+  }, [node.path, isDir, isBusy]);
+
+  const handleDragOverDir = useCallback((e: React.DragEvent) => {
+    if (!isDir) return;
+    if (e.dataTransfer.types.includes('text/x-file-path')) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      setIsDragOverDir(true);
+    }
+  }, [isDir]);
+
+  const handleDragLeaveDir = useCallback(() => {
+    setIsDragOverDir(false);
+  }, []);
+
+  const handleDropOnDir = useCallback((e: React.DragEvent) => {
+    if (!isDir) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOverDir(false);
+    const sourcePath = e.dataTransfer.getData('text/x-file-path');
+    if (!sourcePath) return;
+    // Don't allow dropping into own parent (no-op)
+    const sourceDir = sourcePath.includes('/') ? sourcePath.substring(0, sourcePath.lastIndexOf('/')) : '';
+    if (sourceDir === node.path) return;
+    // Find the source node from the store
+    const findNode = (nodes: FileNode[], path: string): FileNode | null => {
+      for (const n of nodes) {
+        if (n.path === path) return n;
+        if (n.children) {
+          const found = findNode(n.children, path);
+          if (found) return found;
+        }
+      }
+      return null;
+    };
+    const sourceNode = findNode(useFileStore.getState().files, sourcePath);
+    if (sourceNode) {
+      onMoveFile?.(sourceNode, node.path);
+    }
+  }, [isDir, node.path, onMoveFile]);
+
   return (
     <div>
+      <ContextMenu onOpenChange={(open) => { if (!open) setConfirmDeleteCtx(false); }}>
+        <ContextMenuTrigger asChild>
       <div className="group relative flex items-center">
         <button
+          ref={buttonRef}
+          data-path={node.path}
+          data-testid={`file-item-${node.path}`}
+          aria-label={isDir ? `Open folder: ${node.name}` : `Open file: ${node.name}`}
+          draggable={!isDir && !isRenaming && !isBusy}
+          onDragStart={handleDragStartItem}
+          onDragOver={handleDragOverDir}
+          onDragLeave={handleDragLeaveDir}
+          onDrop={handleDropOnDir}
           className={`flex w-full items-center gap-1.5 overflow-hidden rounded-md px-2 py-1 text-sm transition-colors hover:bg-accent/50 ${
             isSelected ? 'bg-accent text-accent-foreground' : ''
-          } ${isBusy ? 'opacity-60 pointer-events-none' : ''}`}
+          } ${isFocused && !isSelected ? 'ring-1 ring-ring bg-accent/30' : ''} ${isBusy ? 'opacity-60 pointer-events-none' : ''} ${isDragOverDir ? 'bg-primary/10 ring-1 ring-primary/40' : ''} ${pendingStatus === 'deleted' ? 'line-through opacity-50' : ''}`}
           style={{ paddingLeft: `${depth * 12 + 8}px` }}
           onClick={() => {
             if (isRenaming || isBusy) return;
+            if (pendingStatus === 'deleted') return;
             if (isDir) {
               toggleDir(node.path);
               return;
@@ -209,12 +340,6 @@ function FileTreeItem({ node, depth, onSelect, onDuplicate, onRename, onDelete, 
                 clickTimer.current = null;
                 onSelect(node);
               }, 250);
-            }
-          }}
-          onContextMenu={(e) => {
-            if (isMd && !isRenaming && !isBusy) {
-              e.preventDefault();
-              setMenuOpen(true);
             }
           }}
           onKeyDown={(e) => {
@@ -247,6 +372,8 @@ function FileTreeItem({ node, depth, onSelect, onDuplicate, onRename, onDelete, 
           {isRenaming ? (
             <input
               ref={renameInputRef}
+              data-testid="rename-input"
+              aria-label="New file name"
               value={renameValue}
               onChange={(e) => setRenameValue(e.target.value)}
               onBlur={commitRename}
@@ -255,12 +382,24 @@ function FileTreeItem({ node, depth, onSelect, onDuplicate, onRename, onDelete, 
               className="min-w-0 flex-1 rounded border border-input bg-background px-1 py-0 text-sm outline-none focus:ring-1 focus:ring-ring"
             />
           ) : (
-            <span className="truncate" title={node.path}>{node.name}</span>
+            <>
+              <span className="truncate" title={node.path}>{node.name}</span>
+              {pendingStatus && (
+                <span className={`ml-1 inline-block h-1.5 w-1.5 rounded-full shrink-0 ${
+                  pendingStatus === 'created' ? 'bg-green-500' :
+                  pendingStatus === 'deleted' ? 'bg-red-500' :
+                  'bg-blue-500'
+                }`} title={pendingStatus} />
+              )}
+              {!pendingStatus && isDirty && (
+                <span className="ml-1 inline-block h-1.5 w-1.5 rounded-full shrink-0 bg-yellow-500" title="modified" />
+              )}
+            </>
           )}
         </button>
         {/* Spinner when busy */}
         {isBusy && (
-          <div className="absolute right-1 top-1/2 -translate-y-1/2 p-0.5">
+          <div className="absolute right-1 top-1/2 -translate-y-1/2 p-0.5" role="status" aria-busy="true" aria-label="Processing file operation">
             <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
           </div>
         )}
@@ -271,12 +410,15 @@ function FileTreeItem({ node, depth, onSelect, onDuplicate, onRename, onDelete, 
               <button
                 className="absolute right-1 top-1/2 -translate-y-1/2 rounded p-0.5 opacity-0 transition-opacity hover:bg-accent group-hover:opacity-100 data-[state=open]:opacity-100"
                 onClick={(e) => e.stopPropagation()}
+                data-testid={`file-actions-${node.path}`}
+                aria-label={`More actions for ${node.name}`}
               >
                 <MoreHorizontal className="h-3.5 w-3.5 text-muted-foreground" />
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-36">
               <DropdownMenuItem
+                data-testid="context-duplicate"
                 onClick={(e) => {
                   e.stopPropagation();
                   onDuplicate?.(node);
@@ -286,6 +428,7 @@ function FileTreeItem({ node, depth, onSelect, onDuplicate, onRename, onDelete, 
                 <span className="text-xs">Duplicate</span>
               </DropdownMenuItem>
               <DropdownMenuItem
+                data-testid="context-rename"
                 onClick={(e) => {
                   e.stopPropagation();
                   setRenameValue(node.name);
@@ -297,6 +440,7 @@ function FileTreeItem({ node, depth, onSelect, onDuplicate, onRename, onDelete, 
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem
+                data-testid="context-delete"
                 onSelect={(e) => {
                   if (!confirmDelete) {
                     e.preventDefault();
@@ -322,6 +466,59 @@ function FileTreeItem({ node, depth, onSelect, onDuplicate, onRename, onDelete, 
           </DropdownMenu>
         )}
       </div>
+        </ContextMenuTrigger>
+        <ContextMenuContent className="w-44">
+          {isMd && (
+            <>
+              <ContextMenuItem onClick={() => onDuplicate?.(node)}>
+                <Copy className="mr-2 h-3.5 w-3.5" />
+                Duplicate
+              </ContextMenuItem>
+              <ContextMenuItem onClick={() => { setRenameValue(node.name); setIsRenaming(true); }}>
+                <Pencil className="mr-2 h-3.5 w-3.5" />
+                Rename
+              </ContextMenuItem>
+              <ContextMenuSeparator />
+            </>
+          )}
+          <ContextMenuItem onClick={handleCopyPath}>
+            <ClipboardCopy className="mr-2 h-3.5 w-3.5" />
+            Copy path
+          </ContextMenuItem>
+          <ContextMenuItem onClick={handleOpenOnGitHub}>
+            <ExternalLink className="mr-2 h-3.5 w-3.5" />
+            Open on GitHub
+          </ContextMenuItem>
+          {isMd && (
+            <>
+              <ContextMenuSeparator />
+              <ContextMenuItem
+                className="group/delete"
+                onSelect={(e) => {
+                  if (!confirmDeleteCtx) {
+                    e.preventDefault();
+                    setConfirmDeleteCtx(true);
+                  } else {
+                    onDelete?.(node);
+                  }
+                }}
+              >
+                {confirmDeleteCtx ? (
+                  <>
+                    <Check className="mr-2 h-3.5 w-3.5 !text-current" />
+                    Click to confirm
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="mr-2 h-3.5 w-3.5 transition-colors group-focus/delete:!text-red-500" />
+                    Delete
+                  </>
+                )}
+              </ContextMenuItem>
+            </>
+          )}
+        </ContextMenuContent>
+      </ContextMenu>
       {isDir && isExpanded && node.children?.map((child) => (
         <FileTreeItem
           key={child.path}
@@ -331,7 +528,9 @@ function FileTreeItem({ node, depth, onSelect, onDuplicate, onRename, onDelete, 
           onDuplicate={onDuplicate}
           onRename={onRename}
           onDelete={onDelete}
+          onMoveFile={onMoveFile}
           busyPaths={busyPaths}
+          focusedPath={focusedPath}
         />
       ))}
     </div>
@@ -371,27 +570,83 @@ function collectMarkdownFiles(nodes: FileNode[]): FileNode[] {
 }
 
 interface FileTreeProps {
+  owner: string;
+  repo: string;
   onFileSelect: (node: FileNode) => void;
   onDuplicate?: (node: FileNode) => void;
   onRename?: (node: FileNode, newName: string) => void;
   onDelete?: (node: FileNode) => void;
+  onMoveFile?: (node: FileNode, targetDir: string) => void;
   onNewFile?: (name: string) => void;
   onNewFolder?: (name: string) => void;
   onDropFiles?: (files: { name: string; content: string }[]) => void;
   busyPaths?: Set<string>;
 }
 
-export function FileTree({ onFileSelect, onDuplicate, onRename, onDelete, onNewFile, onNewFolder, onDropFiles, busyPaths }: FileTreeProps) {
-  const { files, showAllFiles, setShowAllFiles, searchQuery, setSearchQuery, expandAllDirs, collapseAllDirs } = useFileStore();
+export function FileTree({ owner, repo, onFileSelect, onDuplicate, onRename, onDelete, onMoveFile, onNewFile, onNewFolder, onDropFiles, busyPaths }: FileTreeProps) {
+  const { files, showAllFiles, setShowAllFiles, searchQuery, setSearchQuery, expandAllDirs, collapseAllDirs, expandedDirs, toggleDir, currentFile } = useFileStore();
   const { currentBranch } = useSyncStore();
   const { user } = useAuth();
-  const params = useParams();
-  const owner = params.owner as string;
-  const repo = params.repo as string;
+  const router = useRouter();
+  const { repos, fetchRepos, createRepo } = useGitHubRepos();
+  const [repoPopoverOpen, setRepoPopoverOpen] = useState(false);
+  const [createRepoOpen, setCreateRepoOpen] = useState(false);
+  const [repoSearch, setRepoSearch] = useState('');
+  const [repoSelectedIndex, setRepoSelectedIndex] = useState(0);
+  const repoSearchInputRef = useRef<HTMLInputElement>(null);
 
   const [sortBy, setSortBy] = useState<SortBy>('alphabetical');
   const [sortDir, setSortDir] = useState<SortDir>('asc');
   const [exporting, setExporting] = useState(false);
+
+  // Fetch repos when dropdown opens
+  useEffect(() => {
+    if (repoPopoverOpen && repos.length === 0) {
+      fetchRepos();
+    }
+  }, [repoPopoverOpen, repos.length, fetchRepos]);
+
+  const filteredRepos = useMemo(() => {
+    if (!repoSearch.trim()) return repos;
+    const q = repoSearch.toLowerCase();
+    return repos.filter((r: GitHubRepo) => r.full_name.toLowerCase().includes(q));
+  }, [repos, repoSearch]);
+
+  // Reset repo selection index when search changes
+  useEffect(() => {
+    setRepoSelectedIndex(0);
+  }, [repoSearch]);
+
+  // Focus repo search input when popover opens, reset on close
+  useEffect(() => {
+    if (repoPopoverOpen) {
+      setTimeout(() => repoSearchInputRef.current?.focus(), 0);
+    } else {
+      setRepoSearch('');
+      setRepoSelectedIndex(0);
+    }
+  }, [repoPopoverOpen]);
+
+  const handleRepoKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setRepoSelectedIndex((prev) => Math.min(prev + 1, filteredRepos.length - 1));
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setRepoSelectedIndex((prev) => Math.max(prev - 1, 0));
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      const selected = filteredRepos[repoSelectedIndex];
+      if (selected) {
+        router.push(`/${selected.full_name}`);
+        setRepoPopoverOpen(false);
+        setRepoSearch('');
+      }
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      setRepoPopoverOpen(false);
+    }
+  }, [filteredRepos, repoSelectedIndex, router]);
 
   // Inline creation state
   const [creatingType, setCreatingType] = useState<'file' | 'folder' | null>(null);
@@ -610,8 +865,87 @@ export function FileTree({ onFileSelect, onDuplicate, onRename, onDelete, onNewF
     return sortNodes(filterNodes(files), sortBy, sortDir);
   }, [files, showAllFiles, searchQuery, sortBy, sortDir]);
 
+  // Keyboard navigation state
+  const [focusedPath, setFocusedPath] = useState<string | null>(null);
+  const treeContainerRef = useRef<HTMLDivElement>(null);
+
+  // Flat list of visible nodes (respecting expanded dirs)
+  const flatNodes = useMemo(
+    () => flattenVisibleNodes(filteredFiles, expandedDirs),
+    [filteredFiles, expandedDirs]
+  );
+
+  const handleTreeKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      // Don't handle if typing in an input (search, rename, new item)
+      if ((e.target as HTMLElement).tagName === 'INPUT') return;
+
+      const key = e.key;
+      if (!['ArrowDown', 'ArrowUp', 'Enter', 'ArrowRight', 'ArrowLeft'].includes(key)) return;
+      e.preventDefault();
+
+      const currentIndex = focusedPath
+        ? flatNodes.findIndex((n) => n.path === focusedPath)
+        : -1;
+
+      if (key === 'ArrowDown') {
+        const nextIndex = currentIndex < flatNodes.length - 1 ? currentIndex + 1 : 0;
+        const next = flatNodes[nextIndex];
+        if (next) {
+          setFocusedPath(next.path);
+          // Scroll into view
+          requestAnimationFrame(() => {
+            treeContainerRef.current
+              ?.querySelector(`[data-path="${CSS.escape(next.path)}"]`)
+              ?.scrollIntoView({ block: 'nearest' });
+          });
+        }
+      } else if (key === 'ArrowUp') {
+        const prevIndex = currentIndex > 0 ? currentIndex - 1 : flatNodes.length - 1;
+        const prev = flatNodes[prevIndex];
+        if (prev) {
+          setFocusedPath(prev.path);
+          requestAnimationFrame(() => {
+            treeContainerRef.current
+              ?.querySelector(`[data-path="${CSS.escape(prev.path)}"]`)
+              ?.scrollIntoView({ block: 'nearest' });
+          });
+        }
+      } else if (key === 'Enter') {
+        const node = flatNodes[currentIndex];
+        if (node) {
+          if (node.type === 'directory') {
+            toggleDir(node.path);
+          } else {
+            onFileSelect(node);
+          }
+        }
+      } else if (key === 'ArrowRight') {
+        const node = flatNodes[currentIndex];
+        if (node?.type === 'directory' && !expandedDirs.has(node.path)) {
+          toggleDir(node.path);
+        }
+      } else if (key === 'ArrowLeft') {
+        const node = flatNodes[currentIndex];
+        if (node?.type === 'directory' && expandedDirs.has(node.path)) {
+          toggleDir(node.path);
+        }
+      }
+    },
+    [focusedPath, flatNodes, expandedDirs, toggleDir, onFileSelect]
+  );
+
+  // Sync focused path to current file when it changes externally
+  useEffect(() => {
+    if (currentFile?.path) {
+      setFocusedPath(currentFile.path);
+    }
+  }, [currentFile?.path]);
+
   return (
-    <div
+    <nav
+      data-testid="file-tree"
+      aria-label="File explorer"
       className="flex h-full flex-col relative"
       onDragEnter={handleDragEnter}
       onDragLeave={handleDragLeave}
@@ -628,22 +962,86 @@ export function FileTree({ onFileSelect, onDuplicate, onRename, onDelete, onNewF
         </div>
       )}
 
-      <div className="space-y-1.5 border-b p-3 overflow-hidden">
-        {/* Files header with + button */}
-        <div className="flex items-center justify-between">
-          <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Files</span>
+      <div className="space-y-1.5 border-b px-3 pb-3 overflow-hidden">
+        {/* Repo selector + new file button — h-9 to align with tab bar */}
+        <div className="flex h-9 items-center justify-between gap-1">
+          <Popover open={repoPopoverOpen} onOpenChange={setRepoPopoverOpen}>
+            <PopoverTrigger asChild>
+              <button data-testid="repo-selector" aria-label={`Current repository: ${owner}/${repo}. Click to switch repositories`} className="flex items-center gap-1 text-sm font-semibold hover:text-muted-foreground transition-colors cursor-pointer min-w-0 truncate">
+                <span className="truncate">{owner}/{repo}</span>
+                <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" />
+              </button>
+            </PopoverTrigger>
+            <PopoverContent align="start" className="w-72 p-0" sideOffset={8}>
+              <div className="flex items-center gap-2 border-b px-3 py-2">
+                <Search className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                <input
+                  ref={repoSearchInputRef}
+                  data-testid="repo-search-input"
+                  aria-label="Search repositories"
+                  value={repoSearch}
+                  onChange={(e) => setRepoSearch(e.target.value)}
+                  onKeyDown={handleRepoKeyDown}
+                  placeholder="Find a repository..."
+                  className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+                />
+              </div>
+              <div className="max-h-60 overflow-y-auto py-1">
+                {filteredRepos.length === 0 ? (
+                  <div className="px-3 py-4 text-center text-xs text-muted-foreground">
+                    {repos.length === 0 ? 'Loading...' : 'No repos found'}
+                  </div>
+                ) : (
+                  filteredRepos.map((r: GitHubRepo, index: number) => {
+                    const isCurrent = r.full_name === `${owner}/${repo}`;
+                    return (
+                      <button
+                        key={r.id}
+                        onClick={() => {
+                          router.push(`/${r.full_name}`);
+                          setRepoPopoverOpen(false);
+                          setRepoSearch('');
+                        }}
+                        className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm hover:bg-accent transition-colors ${index === repoSelectedIndex ? 'bg-accent' : ''}`}
+                      >
+                        <span className="w-4 shrink-0">
+                          {isCurrent && <Check className="h-3.5 w-3.5 text-primary" />}
+                        </span>
+                        <span className="truncate">{r.full_name}</span>
+                      </button>
+                    );
+                  })
+                )}
+              </div>
+              {/* Create new repository */}
+              <div className="border-t px-1 py-1">
+                <button
+                  data-testid="new-repo-button"
+                  aria-label="Create new repository"
+                  onClick={() => {
+                    setRepoPopoverOpen(false);
+                    setCreateRepoOpen(true);
+                  }}
+                  className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm hover:bg-accent transition-colors"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  <span>New repository</span>
+                </button>
+              </div>
+            </PopoverContent>
+          </Popover>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="sm" className="h-6 w-6 p-0">
+              <Button variant="ghost" size="sm" className="h-6 w-6 p-0" data-testid="new-file-menu" aria-label="Create new file or folder">
                 <Plus className="h-3.5 w-3.5 text-muted-foreground" />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-36">
-              <DropdownMenuItem onClick={() => { setCreatingType('file'); setNewItemName('untitled.md'); }}>
+              <DropdownMenuItem data-testid="new-file-button" onClick={() => { setCreatingType('file'); setNewItemName('untitled.md'); }}>
                 <FilePlus className="mr-2 h-3.5 w-3.5" />
                 <span className="text-xs">New File</span>
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => { setCreatingType('folder'); setNewItemName('new-folder'); }}>
+              <DropdownMenuItem data-testid="new-folder-button" onClick={() => { setCreatingType('folder'); setNewItemName('new-folder'); }}>
                 <FolderPlus className="mr-2 h-3.5 w-3.5" />
                 <span className="text-xs">New Folder</span>
               </DropdownMenuItem>
@@ -655,6 +1053,8 @@ export function FileTree({ onFileSelect, onDuplicate, onRename, onDelete, onNewF
         <div className="relative">
           <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
           <Input
+            data-testid="file-search-input"
+            aria-label="Search files in repository"
             placeholder="Search files..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
@@ -662,13 +1062,13 @@ export function FileTree({ onFileSelect, onDuplicate, onRename, onDelete, onNewF
           />
         </div>
 
-        {/* Controls row: sort, direction, spacer, .md toggle, more */}
-        <div className="flex items-center gap-0.5 min-w-0">
+        {/* Controls row: sort, direction, spacer, more — hidden on mobile */}
+        <div className="hidden sm:flex items-center gap-0.5 min-w-0">
           {/* Sort by toggle */}
           <Button
             variant="ghost"
             size="sm"
-            className="h-6 gap-1 px-1.5 text-[10px] text-muted-foreground shrink-0"
+            className="h-6 gap-1 px-1.5 text-xs text-muted-foreground shrink-0"
             onClick={() => {
               const next = NEXT_SORT[sortBy];
               setSortBy(next);
@@ -683,7 +1083,7 @@ export function FileTree({ onFileSelect, onDuplicate, onRename, onDelete, onNewF
           <Button
             variant="ghost"
             size="sm"
-            className="h-6 gap-1 px-1.5 text-[10px] text-muted-foreground shrink-0"
+            className="h-6 gap-1 px-1.5 text-xs text-muted-foreground shrink-0"
             onClick={toggleSortDir}
           >
             {sortDir === 'asc' ? (
@@ -729,7 +1129,12 @@ export function FileTree({ onFileSelect, onDuplicate, onRename, onDelete, onNewF
       </div>
 
       <ScrollArea className="flex-1 [&>div>div]:!overflow-x-hidden">
-        <div className="p-1">
+        <div
+          ref={treeContainerRef}
+          className="p-1 pr-2 outline-none"
+          tabIndex={0}
+          onKeyDown={handleTreeKeyDown}
+        >
           {/* Inline new item input */}
           {creatingType && (
             <div className="flex items-center gap-1.5 rounded-md px-2 py-1">
@@ -741,6 +1146,8 @@ export function FileTree({ onFileSelect, onDuplicate, onRename, onDelete, onNewF
               )}
               <input
                 ref={newItemInputRef}
+                data-testid={creatingType === 'file' ? 'new-file-input' : 'new-folder-input'}
+                aria-label={creatingType === 'file' ? 'New file name' : 'New folder name'}
                 value={newItemName}
                 onChange={(e) => setNewItemName(e.target.value)}
                 onBlur={commitNewItem}
@@ -760,7 +1167,9 @@ export function FileTree({ onFileSelect, onDuplicate, onRename, onDelete, onNewF
               onDuplicate={onDuplicate}
               onRename={onRename}
               onDelete={onDelete}
+              onMoveFile={onMoveFile}
               busyPaths={busyPaths}
+              focusedPath={focusedPath}
             />
           ))}
           {filteredFiles.length === 0 && !creatingType && (
@@ -768,6 +1177,17 @@ export function FileTree({ onFileSelect, onDuplicate, onRename, onDelete, onNewF
           )}
         </div>
       </ScrollArea>
-    </div>
+
+      <CreateRepoDialog
+        open={createRepoOpen}
+        onOpenChange={setCreateRepoOpen}
+        onCreateRepo={async (name, options) => {
+          const newRepo = await createRepo(name, options);
+          toast.success(`Repository "${newRepo.full_name}" created`);
+          router.push(`/${newRepo.full_name}`);
+          return newRepo;
+        }}
+      />
+    </nav>
   );
 }

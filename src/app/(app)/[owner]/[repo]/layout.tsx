@@ -11,16 +11,19 @@ import { CreateBranchDialog } from '@/components/github/create-branch-dialog';
 import { AppHeader } from '@/components/layout/app-header';
 import { AISidebar } from '@/components/ai/ai-sidebar';
 import { VersionHistorySidebar } from '@/components/github/version-history-sidebar';
+import { RightPanel } from '@/components/layout/right-panel';
 import { ResponsiveSidebar } from '@/components/ui/responsive-sidebar';
 import { Button } from '@/components/ui/button';
-import { Wand2, MessageSquare, History } from 'lucide-react';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { Wand2, MessageSquare, History, SpellCheck, Minimize2, PanelRight } from 'lucide-react';
+import type { RightPanelTab } from '@/stores/ui-store';
 import { PRSelector } from '@/components/github/pr-selector';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { useGitHubTree, useGitHubBranches, useGitHubPulls, useGitHubContent, useCommitsPrefetch, useGitHubRepo } from '@/hooks/use-github';
 import { useFileStore } from '@/stores/file-store';
 import { useSyncStore } from '@/stores/sync-store';
 import { useUIStore } from '@/stores/ui-store';
-import type { FileNode, GitHubTreeItem } from '@/types';
+import type { FileNode, GitHubTreeItem, PendingFileOp } from '@/types';
 import { isMarkdownFile } from '@/lib/editor/markdown-serializer';
 import {
   AlertDialog,
@@ -33,6 +36,12 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { toast } from 'sonner';
+import { CommandPalette } from '@/components/editor/command-palette';
+import { KeyboardShortcutsDialog } from '@/components/editor/keyboard-shortcuts-dialog';
+import { SettingsDialog, type SettingsTab } from '@/components/settings/settings-dialog';
+import { TabBar } from '@/components/editor/tab-bar';
+import { useTabPersistence } from '@/hooks/use-tab-persistence';
+import { WritingChecks } from '@/components/editor/writing-checks';
 
 function buildFileTree(items: GitHubTreeItem[]): FileNode[] {
   const root: FileNode[] = [];
@@ -76,6 +85,17 @@ function buildFileTree(items: GitHubTreeItem[]): FileNode[] {
   return root;
 }
 
+function findNodeByPath(files: FileNode[], path: string): FileNode | null {
+  for (const f of files) {
+    if (f.path === path) return f;
+    if (f.children) {
+      const found = findNodeByPath(f.children, path);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
 export default function RepoLayout({ children }: { children: React.ReactNode }) {
   const params = useParams();
   const router = useRouter();
@@ -85,14 +105,16 @@ export default function RepoLayout({ children }: { children: React.ReactNode }) 
 
   const { tree, loading: treeLoading, fetchTree } = useGitHubTree();
   const { branches, fetchBranches, createBranch } = useGitHubBranches();
-  const { setFiles, dirtyFiles, clearDirty, currentFile } = useFileStore();
-  const { currentBranch, setCurrentBranch, baseBranch, setBaseBranch, setBranches, startSync, finishSync, failSync } = useSyncStore();
+  const { setFiles, dirtyFiles, clearDirty, currentFile, pendingOps, addPendingOp, applyOpToTree, clearPendingOps, closeTab, originalContents, files: storeFiles } = useFileStore();
+  useTabPersistence(owner, repo);
+  const { currentBranch, setCurrentBranch, baseBranch, setBaseBranch, setBranches, startSync, finishSync, failSync, setActivePR, clearActivePR } = useSyncStore();
   const { fetchRepo } = useGitHubRepo();
-  const { sidebarOpen, aiSidebarOpen, versionHistoryOpen, toggleSidebar, toggleAISidebar, toggleCommentSidebar, toggleVersionHistory, setSidebarOpen, activeCommentCount, sidebarWidth, setSidebarWidth } = useUIStore();
+  const { sidebarOpen, rightPanelOpen, rightPanelTab, toggleSidebar, toggleRightPanelTab, closeRightPanel, setSidebarOpen, activeCommentCount, sidebarWidth, setSidebarWidth, focusMode, setFocusMode, settingsDialogOpen, settingsDialogTab, openSettingsDialog, closeSettingsDialog, tabPanelStates } = useUIStore();
+  const activeTabPath = useFileStore((s) => s.activeTabPath);
   const isMobile = useIsMobile();
   const isResizing = useRef(false);
-  const { createPR } = useGitHubPulls();
-  const { fetchContent, createContent, deleteContent } = useGitHubContent();
+  const { createPR, fetchPRForBranch } = useGitHubPulls();
+  const { fetchContent, createContent, deleteContent, updateContent } = useGitHubContent();
   const prefetchCommits = useCommitsPrefetch();
 
   // Pre-fetch version history in background so it's ready when user opens the sidebar
@@ -101,6 +123,40 @@ export default function RepoLayout({ children }: { children: React.ReactNode }) 
       prefetchCommits(owner, repo, currentFile.path);
     }
   }, [owner, repo, currentFile?.path, prefetchCommits]);
+
+  // PR detection: check if current branch has an open PR (runs once per branch change, not per file)
+  useEffect(() => {
+    clearActivePR();
+    const detect = async () => {
+      try {
+        const pr = await fetchPRForBranch(owner, repo, currentBranch);
+        if (pr) setActivePR(pr);
+      } catch {
+        // Silent — PR detection is best-effort
+      }
+    };
+    detect();
+  }, [owner, repo, currentBranch, fetchPRForBranch, setActivePR, clearActivePR]);
+
+  // Track which panel icon to show per file tab (persists across panel open/close)
+  const lastPanelPerFile = useRef<Record<string, RightPanelTab>>({});
+
+  // Save/restore per-tab sidebar state when switching tabs
+  const prevTabPathRef = useRef<string | null>(activeTabPath);
+  useEffect(() => {
+    const prev = prevTabPathRef.current;
+    if (activeTabPath && activeTabPath !== prev) {
+      useUIStore.getState().switchTab(prev, activeTabPath);
+    }
+    prevTabPathRef.current = activeTabPath;
+  }, [activeTabPath]);
+
+  // Track which panel was last used per file (for dynamic header icon)
+  useEffect(() => {
+    if (currentFile?.path && rightPanelTab) {
+      lastPanelPerFile.current[currentFile.path] = rightPanelTab;
+    }
+  }, [currentFile?.path, rightPanelTab]);
 
   // Fetch the repo's actual default branch from GitHub on mount
   useEffect(() => {
@@ -144,6 +200,21 @@ export default function RepoLayout({ children }: { children: React.ReactNode }) 
   const [branchDialogOpen, setBranchDialogOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<FileNode | null>(null);
   const [busyPaths, setBusyPaths] = useState<Set<string>>(new Set());
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+
+  // Listen for '?' key to open keyboard shortcuts dialog
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === '?' && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        const tag = (e.target as HTMLElement)?.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target as HTMLElement)?.isContentEditable) return;
+        e.preventDefault();
+        setShortcutsOpen(true);
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, []);
 
   const addBusy = useCallback((path: string) => {
     setBusyPaths((prev) => new Set(prev).add(path));
@@ -198,16 +269,64 @@ export default function RepoLayout({ children }: { children: React.ReactNode }) 
   const handleCommit = async (message: string, description: string) => {
     startSync();
     try {
-      // The auto-save already commits files individually.
-      // This manual commit just confirms the latest state is saved.
-      // If there are dirty files, trigger a save for the current file.
-      if (dirtyFiles.size === 0) {
-        toast.info('All changes already saved to GitHub');
+      const ops = useFileStore.getState().pendingOps;
+      const dirty = useFileStore.getState().dirtyFiles;
+
+      if (ops.length === 0 && dirty.size === 0) {
+        toast.info('No changes to commit');
         finishSync('');
         return;
       }
-      toast.success(`Committed ${dirtyFiles.size} file(s) to GitHub`);
+
+      const commitMsg = description ? `${message}\n\n${description}` : message;
+      let errors = 0;
+
+      // Execute pending operations in order: creates first, then renames/moves, then deletes
+      const creates = ops.filter(op => op.type === 'create' || op.type === 'duplicate');
+      const renames = ops.filter(op => op.type === 'rename' || op.type === 'move');
+      const deletes = ops.filter(op => op.type === 'delete');
+
+      for (const op of creates) {
+        try {
+          const path = op.type === 'create' ? op.path : op.newPath;
+          await createContent(owner, repo, path, op.content, commitMsg, currentBranch);
+        } catch { errors++; }
+      }
+
+      for (const op of renames) {
+        try {
+          await createContent(owner, repo, op.newPath, op.content, commitMsg, currentBranch);
+          await deleteContent(owner, repo, op.oldPath, op.sha, commitMsg, currentBranch);
+        } catch { errors++; }
+      }
+
+      for (const op of deletes) {
+        try {
+          await deleteContent(owner, repo, op.path, op.sha, commitMsg, currentBranch);
+        } catch { errors++; }
+      }
+
+      // Commit dirty file content changes
+      for (const filePath of dirty) {
+        try {
+          const fileNode = findNodeByPath(useFileStore.getState().files, filePath);
+          if (fileNode?.content != null && fileNode.sha) {
+            await updateContent(owner, repo, filePath, fileNode.content, commitMsg, fileNode.sha, currentBranch);
+          }
+        } catch { errors++; }
+      }
+
+      // Clear everything and refresh
+      clearPendingOps();
       clearDirty();
+      await refreshTree();
+
+      if (errors > 0) {
+        toast.warning(`Committed with ${errors} error(s). Some operations may have failed.`);
+      } else {
+        const total = ops.length + dirty.size;
+        toast.success(`Committed ${total} change${total !== 1 ? 's' : ''} to GitHub`);
+      }
       finishSync('');
     } catch (error) {
       const msg = error instanceof Error ? error.message : 'Commit failed';
@@ -292,17 +411,18 @@ export default function RepoLayout({ children }: { children: React.ReactNode }) 
         newPath = `${dir}${newName}`;
         counter++;
       }
-      await createContent(owner, repo, newPath, content, `Duplicate ${node.path}`, currentBranch);
-      await refreshTree();
+      const op: PendingFileOp = { type: 'duplicate', newPath, content };
+      addPendingOp(op);
+      applyOpToTree(op);
       router.push(buildRepoUrl(newPath));
-      toast.success(`Duplicated as ${newName}`);
+      toast.success(`Duplicated as ${newName} (pending commit)`);
     } catch (error) {
       const msg = error instanceof Error ? error.message : 'Failed to duplicate file';
       toast.error(msg);
     } finally {
       removeBusy(node.path);
     }
-  }, [owner, repo, currentBranch, fetchContent, createContent, refreshTree, router, buildRepoUrl, addBusy, removeBusy]);
+  }, [owner, repo, currentBranch, fetchContent, addPendingOp, applyOpToTree, router, buildRepoUrl, addBusy, removeBusy]);
 
   const handleRenameFile = useCallback(async (node: FileNode, newName: string) => {
     addBusy(node.path);
@@ -311,73 +431,87 @@ export default function RepoLayout({ children }: { children: React.ReactNode }) 
       const content = file.content ? new TextDecoder().decode(Uint8Array.from(atob(file.content), c => c.charCodeAt(0))) : '';
       const dir = node.path.includes('/') ? node.path.substring(0, node.path.lastIndexOf('/') + 1) : '';
       const newPath = `${dir}${newName}`;
-      await createContent(owner, repo, newPath, content, `Rename ${node.path} → ${newPath}`, currentBranch);
-      await deleteContent(owner, repo, node.path, file.sha, `Rename ${node.path} → ${newPath}`, currentBranch);
-      await refreshTree();
+      closeTab(node.path);
+      const op: PendingFileOp = { type: 'rename', oldPath: node.path, newPath, sha: file.sha, content };
+      addPendingOp(op);
+      applyOpToTree(op);
       if (currentFile?.path === node.path) {
         router.push(buildRepoUrl(newPath));
       }
-      toast.success(`Renamed to ${newName}`);
+      toast.success(`Renamed to ${newName} (pending commit)`);
     } catch (error) {
       const msg = error instanceof Error ? error.message : 'Failed to rename file';
       toast.error(msg);
     } finally {
       removeBusy(node.path);
     }
-  }, [owner, repo, currentBranch, fetchContent, createContent, deleteContent, refreshTree, router, buildRepoUrl, currentFile, addBusy, removeBusy]);
+  }, [owner, repo, currentBranch, fetchContent, addPendingOp, applyOpToTree, closeTab, router, buildRepoUrl, currentFile, addBusy, removeBusy]);
 
-  const handleDeleteFile = useCallback(async (node: FileNode) => {
+  const handleDeleteFile = useCallback((node: FileNode) => {
+    const op: PendingFileOp = { type: 'delete', path: node.path, sha: node.sha || '' };
+    addPendingOp(op);
+    applyOpToTree(op);
+    closeTab(node.path);
+    if (currentFile?.path === node.path) {
+      router.push(buildRepoUrl());
+    }
+    toast.success(`Deleted ${node.name} (pending commit)`);
+    setDeleteTarget(null);
+  }, [addPendingOp, applyOpToTree, closeTab, router, buildRepoUrl, currentFile]);
+
+  const handleNewFile = useCallback((name: string) => {
+    const op: PendingFileOp = { type: 'create', path: name, content: '' };
+    addPendingOp(op);
+    applyOpToTree(op);
+    router.push(buildRepoUrl(name));
+    toast.success(`Created ${name} (pending commit)`);
+  }, [addPendingOp, applyOpToTree, router, buildRepoUrl]);
+
+  const handleNewFolder = useCallback((folderName: string) => {
+    const filePath = `${folderName}/untitled.md`;
+    const op: PendingFileOp = { type: 'create', path: filePath, content: '' };
+    addPendingOp(op);
+    applyOpToTree(op);
+    router.push(buildRepoUrl(filePath));
+    toast.success(`Created folder ${folderName} (pending commit)`);
+  }, [addPendingOp, applyOpToTree, router, buildRepoUrl]);
+
+  const handleMoveFile = useCallback(async (node: FileNode, targetDir: string) => {
     addBusy(node.path);
     try {
-      const file = await fetchContent(owner, repo, node.path, currentBranch);
-      await deleteContent(owner, repo, node.path, file.sha, `Delete ${node.path}`, currentBranch);
-      await refreshTree();
-      if (currentFile?.path === node.path) {
-        router.push(buildRepoUrl());
+      const newPath = `${targetDir}/${node.name}`;
+      // Check if target already exists
+      const existingPaths = new Set<string>();
+      const collectPaths = (nodes: FileNode[]) => {
+        for (const n of nodes) {
+          existingPaths.add(n.path);
+          if (n.children) collectPaths(n.children);
+        }
+      };
+      collectPaths(useFileStore.getState().files);
+      if (existingPaths.has(newPath)) {
+        toast.error(`A file named "${node.name}" already exists in ${targetDir}`);
+        return;
       }
-      toast.success(`Deleted ${node.name}`);
+      const file = await fetchContent(owner, repo, node.path, currentBranch);
+      const content = file.content ? new TextDecoder().decode(Uint8Array.from(atob(file.content), c => c.charCodeAt(0))) : '';
+      closeTab(node.path);
+      const op: PendingFileOp = { type: 'move', oldPath: node.path, newPath, sha: file.sha, content };
+      addPendingOp(op);
+      applyOpToTree(op);
+      if (currentFile?.path === node.path) {
+        router.push(buildRepoUrl(newPath));
+      }
+      toast.success(`Moved to ${targetDir}/ (pending commit)`);
     } catch (error) {
-      const msg = error instanceof Error ? error.message : 'Failed to delete file';
+      const msg = error instanceof Error ? error.message : 'Failed to move file';
       toast.error(msg);
     } finally {
       removeBusy(node.path);
-      setDeleteTarget(null);
     }
-  }, [owner, repo, currentBranch, fetchContent, deleteContent, refreshTree, router, buildRepoUrl, currentFile, addBusy, removeBusy]);
+  }, [owner, repo, currentBranch, fetchContent, addPendingOp, applyOpToTree, closeTab, router, buildRepoUrl, currentFile, addBusy, removeBusy]);
 
-  const handleNewFile = useCallback(async (name: string) => {
-    addBusy(name);
-    try {
-      await createContent(owner, repo, name, '', `Create ${name}`, currentBranch);
-      await refreshTree();
-      router.push(buildRepoUrl(name));
-      toast.success(`Created ${name}`);
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : 'Failed to create file';
-      toast.error(msg);
-    } finally {
-      removeBusy(name);
-    }
-  }, [owner, repo, currentBranch, createContent, refreshTree, router, buildRepoUrl, addBusy, removeBusy]);
-
-  const handleNewFolder = useCallback(async (folderName: string) => {
-    const filePath = `${folderName}/untitled.md`;
-    addBusy(filePath);
-    try {
-      await createContent(owner, repo, filePath, '', `Create ${filePath}`, currentBranch);
-      await refreshTree();
-      router.push(buildRepoUrl(filePath));
-      toast.success(`Created folder ${folderName}`);
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : 'Failed to create folder';
-      toast.error(msg);
-    } finally {
-      removeBusy(filePath);
-    }
-  }, [owner, repo, currentBranch, createContent, refreshTree, router, buildRepoUrl, addBusy, removeBusy]);
-
-  const handleDropFiles = useCallback(async (droppedFiles: { name: string; content: string }[]) => {
-    const toastId = toast.loading(`Uploading ${droppedFiles.length} file${droppedFiles.length > 1 ? 's' : ''}...`);
+  const handleDropFiles = useCallback((droppedFiles: { name: string; content: string }[]) => {
     const existingPaths = new Set<string>();
     const collectPaths = (nodes: FileNode[]) => {
       for (const n of nodes) {
@@ -387,36 +521,27 @@ export default function RepoLayout({ children }: { children: React.ReactNode }) 
     };
     collectPaths(useFileStore.getState().files);
 
-    let created = 0;
     let lastPath = '';
     for (const file of droppedFiles) {
       let finalName = file.name;
-      // Deduplicate if file already exists
       if (existingPaths.has(finalName)) {
         const baseName = finalName.replace(/\.md$/, '');
         let counter = 2;
         while (existingPaths.has(`${baseName}-${counter}.md`)) counter++;
         finalName = `${baseName}-${counter}.md`;
       }
-      try {
-        await createContent(owner, repo, finalName, file.content, `Upload ${finalName}`, currentBranch);
-        existingPaths.add(finalName);
-        lastPath = finalName;
-        created++;
-      } catch {
-        // Continue with remaining files
-      }
+      const op: PendingFileOp = { type: 'create', path: finalName, content: file.content };
+      addPendingOp(op);
+      applyOpToTree(op);
+      existingPaths.add(finalName);
+      lastPath = finalName;
     }
 
-    toast.dismiss(toastId);
-    if (created > 0) {
-      await refreshTree();
-      if (lastPath) router.push(buildRepoUrl(lastPath));
-      toast.success(`Uploaded ${created} file${created > 1 ? 's' : ''}`);
-    } else {
-      toast.error('Failed to upload files');
+    if (lastPath) {
+      router.push(buildRepoUrl(lastPath));
+      toast.success(`Added ${droppedFiles.length} file${droppedFiles.length > 1 ? 's' : ''} (pending commit)`);
     }
-  }, [owner, repo, currentBranch, createContent, refreshTree, router, buildRepoUrl]);
+  }, [addPendingOp, applyOpToTree, router, buildRepoUrl]);
 
   const handleCreateBranchSubmit = useCallback(async (name: string) => {
     // Get the SHA of the current branch head
@@ -434,41 +559,83 @@ export default function RepoLayout({ children }: { children: React.ReactNode }) 
   }, [owner, repo, currentBranch, fetchBranches, createBranch, setBranches, setCurrentBranch]);
 
   return (
-    <div className="flex h-screen w-full flex-col">
+    <div className="flex h-screen w-full flex-col" data-focus-mode={focusMode ? 'true' : undefined}>
+      {/* Floating exit focus mode button */}
+      {focusMode && (
+        <button
+          onClick={() => setFocusMode(false)}
+          className="focus-mode-exit-btn"
+          aria-label="Exit focus mode"
+        >
+          <Minimize2 className="h-3.5 w-3.5 mr-1.5" />
+          Exit focus mode
+        </button>
+      )}
       <AppHeader
         repoContext={{ owner, repo, sidebarOpen, onToggleSidebar: toggleSidebar, filePath: currentFile?.path }}
         breadcrumbSlot={
           <BranchSelector onBranchChange={handleBranchChange} onCreateBranch={handleCreateBranch} />
         }
         actions={
+          <TooltipProvider delayDuration={300}>
           <div className="flex items-center gap-0.5">
-            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={toggleVersionHistory}>
-              <History className="h-[18px] w-[18px]" />
-            </Button>
-            <Button variant="ghost" size="icon" className="h-8 w-8 relative" onClick={toggleCommentSidebar}>
-              <MessageSquare className="h-[18px] w-[18px]" />
-              {activeCommentCount > 0 && (
-                <span className="absolute -top-0.5 -right-0.5 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-primary px-1 text-[10px] font-medium text-primary-foreground">
-                  {activeCommentCount > 99 ? '99+' : activeCommentCount}
-                </span>
-              )}
-            </Button>
-            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={toggleAISidebar}>
-              <Wand2 className="h-[18px] w-[18px]" />
-            </Button>
+            {(() => {
+              const PANEL_ICONS: Record<RightPanelTab, { icon: typeof History; label: string }> = {
+                versions: { icon: History, label: 'Version History' },
+                comments: { icon: MessageSquare, label: 'Comments' },
+                checks: { icon: SpellCheck, label: currentFile?.isMarkdown === false ? 'Code Review' : 'Writing Checks' },
+                ai: { icon: Wand2, label: 'AI Assistant' },
+              };
+              // When panel is closed: show the per-file saved icon (hint of what will open)
+              // When panel is open: show stable PanelRight icon (avoids flickering as user switches tabs)
+              const savedTab = currentFile?.path ? lastPanelPerFile.current[currentFile.path] ?? null : null;
+              const displayTab: RightPanelTab | null = rightPanelOpen ? null : (savedTab ?? rightPanelTab);
+              const clickTab: RightPanelTab = savedTab ?? rightPanelTab ?? 'ai';
+              const DisplayIcon = displayTab ? PANEL_ICONS[displayTab].icon : PanelRight;
+              const label = displayTab ? PANEL_ICONS[displayTab].label : 'Panel';
+              return (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      data-testid="toggle-right-panel"
+                      aria-label={rightPanelOpen ? `Close ${label}` : `Open ${label}`}
+                      className="h-8 w-8 relative"
+                      onClick={() => {
+                        if (rightPanelOpen) closeRightPanel();
+                        else toggleRightPanelTab(clickTab);
+                      }}
+                    >
+                      <DisplayIcon className="h-[18px] w-[18px]" />
+                      {displayTab === 'comments' && activeCommentCount > 0 && (
+                        <span className="absolute -top-0.5 -right-0.5 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-primary px-1 text-[10px] font-medium text-primary-foreground">
+                          {activeCommentCount > 99 ? '99+' : activeCommentCount}
+                        </span>
+                      )}
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom"><p className="text-xs">{label}</p></TooltipContent>
+                </Tooltip>
+              );
+            })()}
             <PRSelector owner={owner} repo={repo} onBranchChange={handleBranchChange} />
-            <SyncButton onPull={handlePull} onPush={handlePush} onCreatePR={() => setPRDialogOpen(true)} onCreateBranch={handleCreateBranch} />
+            <SyncButton onPull={handlePull} onPush={handlePush} onCreatePR={() => setPRDialogOpen(true)} onCreateBranch={handleCreateBranch} onOpenAutoSaveSettings={() => openSettingsDialog('auto-save')} />
           </div>
+          </TooltipProvider>
         }
       />
       <div className="flex flex-1 overflow-hidden">
-        <ResponsiveSidebar isOpen={sidebarOpen} onClose={toggleSidebar} side="left" title="Files">
-          <div className="relative h-full shrink-0 border-r bg-background" style={{ width: isMobile ? undefined : sidebarWidth }}>
+        <ResponsiveSidebar isOpen={sidebarOpen && !focusMode} onClose={toggleSidebar} side="left" title={`${owner}/${repo}`}>
+          <div className="relative h-full shrink-0 border-r bg-background transition-[width] duration-200 ease-out" style={{ width: isMobile ? undefined : sidebarWidth }}>
             <FileTree
+              owner={owner}
+              repo={repo}
               onFileSelect={handleFileSelect}
               onDuplicate={handleDuplicateFile}
               onRename={handleRenameFile}
               onDelete={(node) => setDeleteTarget(node)}
+              onMoveFile={handleMoveFile}
               onNewFile={handleNewFile}
               onNewFolder={handleNewFolder}
               onDropFiles={handleDropFiles}
@@ -483,25 +650,74 @@ export default function RepoLayout({ children }: { children: React.ReactNode }) 
             )}
           </div>
         </ResponsiveSidebar>
-        <main className="flex-1 min-w-0 overflow-auto">{children}</main>
-        <ResponsiveSidebar isOpen={versionHistoryOpen} onClose={toggleVersionHistory} side="right" title="Version History">
-          <VersionHistorySidebar
-            isOpen={versionHistoryOpen}
-            onClose={toggleVersionHistory}
-            owner={owner}
-            repo={repo}
-            filePath={currentFile?.path}
-          />
-        </ResponsiveSidebar>
-        <ResponsiveSidebar isOpen={aiSidebarOpen} onClose={toggleAISidebar} side="right" title="AI Assistant">
-          <AISidebar isOpen={aiSidebarOpen} onClose={toggleAISidebar} />
+        <main data-testid="main-content" aria-label="Document content" className="flex-1 min-w-0 flex flex-col overflow-hidden">
+          <TabBar owner={owner} repo={repo} buildRepoUrl={buildRepoUrl} onNewFile={handleNewFile} />
+          <div className="flex-1 min-w-0 overflow-auto">{children}</div>
+        </main>
+        {/* Unified right panel — contains AI, Version History, Checks; Comments rendered from page.tsx */}
+        <ResponsiveSidebar isOpen={rightPanelOpen && !focusMode} onClose={closeRightPanel} side="right" title="Panel">
+          <RightPanel
+            activeTab={rightPanelTab}
+            onTabChange={toggleRightPanelTab}
+            onClose={closeRightPanel}
+            activeCommentCount={activeCommentCount}
+          >
+            {/* Version History */}
+            {rightPanelTab === 'versions' && (
+              <VersionHistorySidebar
+                isOpen={true}
+                onClose={closeRightPanel}
+                owner={owner}
+                repo={repo}
+                filePath={currentFile?.path}
+              />
+            )}
+
+            {/* Writing Checks / Code Review */}
+            {rightPanelTab === 'checks' && (
+              <WritingChecks
+                isOpen={true}
+                onClose={closeRightPanel}
+                content={currentFile?.content ?? ''}
+                onApplyFix={(oldText, newText) => {
+                  useUIStore.getState().setPendingTextEdit({ oldText, newText });
+                }}
+                mode={currentFile?.isMarkdown === false ? 'code' : 'writing'}
+                filename={currentFile?.path}
+              />
+            )}
+
+            {/* AI Sidebar — always mounted (hidden via CSS) to preserve chat state */}
+            <div className={rightPanelTab === 'ai' ? 'h-full' : 'hidden'}>
+              <AISidebar isOpen={rightPanelOpen && rightPanelTab === 'ai'} onClose={closeRightPanel} />
+            </div>
+
+            {/* Comments are rendered from page.tsx via portal — always mounted so the portal target exists */}
+            <div data-testid="right-panel-comments-slot" className={rightPanelTab === 'comments' ? 'h-full' : 'hidden'}>
+              {rightPanelTab === 'comments' && !currentFile && (
+                <div className="flex h-full items-center justify-center text-center">
+                  <div>
+                    <MessageSquare className="mx-auto mb-3 h-8 w-8 text-muted-foreground/50" />
+                    <p className="text-sm text-muted-foreground">No comments yet</p>
+                    <p className="text-xs text-muted-foreground mt-1">Open a file to view and add comments</p>
+                  </div>
+                </div>
+              )}
+            </div>
+          </RightPanel>
         </ResponsiveSidebar>
       </div>
       <CommitDialog
         open={commitDialogOpen}
         onOpenChange={setCommitDialogOpen}
         onCommit={handleCommit}
-        changedFiles={Array.from(dirtyFiles)}
+        changedFiles={Array.from(dirtyFiles).map((path) => {
+          const fileNode = findNodeByPath(storeFiles, path);
+          const original = originalContents.get(path) ?? '';
+          const current = fileNode?.content ?? '';
+          return { path, original, current };
+        })}
+        pendingOps={pendingOps}
       />
       <PRDialog
         open={prDialogOpen}
@@ -531,6 +747,9 @@ export default function RepoLayout({ children }: { children: React.ReactNode }) 
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+      <CommandPalette onOpenShortcuts={() => setShortcutsOpen(true)} />
+      <KeyboardShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
+      <SettingsDialog open={settingsDialogOpen} onOpenChange={(open) => open ? openSettingsDialog() : closeSettingsDialog()} initialTab={(settingsDialogTab as SettingsTab) ?? undefined} />
     </div>
   );
 }

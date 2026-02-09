@@ -226,7 +226,7 @@ function InteractivePreview() {
   ];
 
   return (
-    <div className="overflow-hidden rounded-xl border bg-card shadow-2xl">
+    <div data-testid="interactive-preview" className="overflow-hidden rounded-xl border bg-card shadow-2xl" role="region" aria-label="Interactive application preview demonstrating GitMarkdown editor features">
       {/* Title bar */}
       <div className="flex items-center gap-2 border-b bg-muted/40 px-4 py-2.5">
         <div className="flex gap-1.5">
@@ -255,12 +255,15 @@ function InteractivePreview() {
 
       <div className="flex" style={{ height: 420 }}>
         {/* File tree */}
-        <div className="w-52 shrink-0 border-r bg-muted/20 p-3">
+        <nav data-testid="preview-file-tree" className="w-52 shrink-0 border-r bg-muted/20 p-3" aria-label="File tree navigation for selecting markdown files to edit">
           <div className="mb-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Files</div>
-          <div className="space-y-0.5 text-sm">
+          <div className="space-y-0.5 text-sm" role="list">
             {files.map((f) => (
               <button
                 key={f.name}
+                data-testid={`preview-file-${f.name.replace(/[/.]/g, '-')}`}
+                aria-label={f.isDir ? `${f.name} folder` : `Open ${f.name} in the editor`}
+                aria-current={f.name === selectedFile ? 'page' : undefined}
                 onClick={() => !f.isDir && handleFileSelect(f.name)}
                 className={`flex w-full items-center rounded px-2 py-1 text-left text-xs transition-colors ${
                   f.name === selectedFile
@@ -273,15 +276,18 @@ function InteractivePreview() {
               </button>
             ))}
           </div>
-        </div>
+        </nav>
 
         {/* Editor */}
-        <div className="flex-1 flex flex-col min-w-0">
+        <div data-testid="preview-editor" className="flex-1 flex flex-col min-w-0" role="region" aria-label="Markdown editor area with formatting toolbar and content">
           {/* Toolbar */}
-          <div className="flex items-center gap-0.5 border-b px-3 py-1.5">
+          <div className="flex items-center gap-0.5 border-b px-3 py-1.5" role="toolbar" aria-label="Text formatting toolbar">
             {toolbarItems.map(({ icon: Icon, command, value, key }, i) => (
               <button
                 key={i}
+                data-testid={`preview-toolbar-${key}`}
+                aria-label={`Format text as ${key}`}
+                aria-pressed={!!activeFormats[key]}
                 onClick={() => handleFormat(command, value)}
                 className={`rounded p-1 transition-colors ${
                   activeFormats[key]
@@ -329,6 +335,10 @@ function InteractivePreview() {
                 ref={editorRef}
                 contentEditable
                 suppressContentEditableWarning
+                role="textbox"
+                aria-label="Rich text editor for editing the selected markdown file"
+                aria-multiline="true"
+                data-testid="preview-editor-content"
                 className="prose prose-sm max-w-none outline-none min-h-full focus:outline-none [&_h1]:text-2xl [&_h1]:font-bold [&_h1]:mt-0 [&_h1]:mb-3 [&_h2]:text-lg [&_h2]:font-semibold [&_h2]:mt-4 [&_h2]:mb-2 [&_blockquote]:border-l-3 [&_blockquote]:border-border [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground [&_blockquote]:italic [&_code]:bg-muted [&_code]:px-1 [&_code]:py-0.5 [&_code]:rounded [&_code]:text-xs [&_code]:font-mono [&_li]:text-sm [&_p]:text-sm [&_p]:leading-relaxed"
                 onKeyUp={updateActiveFormats}
                 onMouseUp={updateActiveFormats}
@@ -338,12 +348,12 @@ function InteractivePreview() {
         </div>
 
         {/* AI Sidebar */}
-        <div className="w-64 shrink-0 border-l bg-muted/10 flex flex-col">
+        <aside data-testid="preview-ai-sidebar" className="w-64 shrink-0 border-l bg-muted/10 flex flex-col" aria-label="AI assistant sidebar for asking questions about your documents">
           <div className="flex items-center gap-2 border-b px-3 py-2.5">
             <Sparkles className="h-3.5 w-3.5 text-primary" />
             <span className="text-xs font-semibold">AI Assistant</span>
           </div>
-          <div ref={aiScrollRef} className="flex-1 p-3 space-y-3 overflow-auto">
+          <div ref={aiScrollRef} className="flex-1 p-3 space-y-3 overflow-auto" aria-live="polite" role="log" aria-label="AI conversation messages">
             {aiMessages.length === 0 ? (
               <div className="flex flex-col items-center py-6 text-center">
                 <Sparkles className="h-6 w-6 text-muted-foreground/40 mb-3" />
@@ -352,6 +362,8 @@ function InteractivePreview() {
                   {suggestedPrompts.map((prompt) => (
                     <button
                       key={prompt}
+                      data-testid={`preview-ai-prompt-${prompt.toLowerCase().replace(/\s+/g, '-')}`}
+                      aria-label={`Send suggested prompt: ${prompt}`}
                       onClick={() => handleAiSend(prompt)}
                       className="w-full rounded-md border bg-background px-2.5 py-1.5 text-left text-[10px] text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
                     >
@@ -375,7 +387,7 @@ function InteractivePreview() {
                   </div>
                 ))}
                 {aiTyping && (
-                  <div className="rounded-lg bg-muted px-2.5 py-2 mr-4">
+                  <div className="rounded-lg bg-muted px-2.5 py-2 mr-4" role="status" aria-label="AI is typing a response">
                     <div className="flex gap-1">
                       <div className="h-1.5 w-1.5 rounded-full bg-muted-foreground/40 animate-bounce" style={{ animationDelay: '0ms' }} />
                       <div className="h-1.5 w-1.5 rounded-full bg-muted-foreground/40 animate-bounce" style={{ animationDelay: '150ms' }} />
@@ -389,6 +401,8 @@ function InteractivePreview() {
           <div className="border-t p-2">
             <div className="flex items-center gap-1.5 rounded-md border bg-background px-2 py-1.5">
               <input
+                data-testid="preview-ai-input"
+                aria-label="Type a message to ask the AI assistant about your documents"
                 value={aiInput}
                 onChange={(e) => setAiInput(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && handleAiSend()}
@@ -396,15 +410,18 @@ function InteractivePreview() {
                 className="flex-1 text-[11px] bg-transparent outline-none placeholder:text-muted-foreground"
               />
               <button
+                data-testid="preview-ai-send-button"
+                aria-label="Send message to AI assistant"
                 onClick={() => handleAiSend()}
                 disabled={aiTyping || !aiInput.trim()}
+                aria-busy={aiTyping}
                 className="text-muted-foreground hover:text-foreground transition-colors disabled:opacity-40"
               >
                 <Send className="h-3 w-3" />
               </button>
             </div>
           </div>
-        </div>
+        </aside>
       </div>
     </div>
   );
@@ -593,30 +610,58 @@ export default function LandingPage() {
 
   return (
     <div className="min-h-screen bg-background">
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{
+          __html: JSON.stringify({
+            "@context": "https://schema.org",
+            "@type": "WebApplication",
+            "name": "GitMarkdown",
+            "url": "https://gitmarkdown.com",
+            "description": "A collaborative markdown editor with two-way GitHub sync, real-time collaboration, AI features, and inline reviews.",
+            "applicationCategory": "DeveloperApplication",
+            "operatingSystem": "Web",
+            "offers": {
+              "@type": "Offer",
+              "price": "0",
+              "priceCurrency": "USD"
+            },
+            "featureList": [
+              "Two-way GitHub sync",
+              "Real-time collaboration",
+              "AI-powered editing",
+              "Inline comments and reviews",
+              "Version history",
+              "Slash commands",
+              "Mermaid diagram generation"
+            ]
+          })
+        }}
+      />
       {/* Nav */}
-      <nav className="sticky top-0 z-50 border-b bg-background/80 backdrop-blur-sm">
+      <nav data-testid="main-nav" className="sticky top-0 z-50 border-b bg-background/80 backdrop-blur-sm" aria-label="Main navigation">
         <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-4">
-          <Link href="/" className="flex items-center gap-2">
+          <Link href="/" data-testid="nav-logo" aria-label="GitMarkdown home page" className="flex items-center gap-2">
             <LogoMark className="h-6 w-6" />
             <span className="text-lg font-bold">GitMarkdown</span>
           </Link>
           <div className="flex items-center gap-3">
-            <Link href="#features" className="hidden sm:block text-sm text-muted-foreground hover:text-foreground transition-colors">
+            <Link href="#features" data-testid="nav-features-link" className="hidden sm:block text-sm text-muted-foreground hover:text-foreground transition-colors">
               Features
             </Link>
-            <Link href="#faq" className="hidden sm:block text-sm text-muted-foreground hover:text-foreground transition-colors">
+            <Link href="#faq" data-testid="nav-faq-link" className="hidden sm:block text-sm text-muted-foreground hover:text-foreground transition-colors">
               FAQ
             </Link>
             {isLoggedIn ? (
-              <Link href="/dashboard">
+              <Link href="/dashboard" data-testid="nav-dashboard-link">
                 <Button size="sm">Go to Dashboard</Button>
               </Link>
             ) : (
               <>
-                <Link href="/login">
+                <Link href="/login" data-testid="nav-sign-in-link">
                   <Button variant="ghost" size="sm">Sign In</Button>
                 </Link>
-                <Link href="/login">
+                <Link href="/login" data-testid="nav-get-started-link">
                   <Button size="sm">
                     <Github className="mr-1.5 h-4 w-4" />
                     Get Started
@@ -629,28 +674,28 @@ export default function LandingPage() {
       </nav>
 
       {/* Hero */}
-      <section className="mx-auto max-w-6xl px-4 pt-20 pb-16 text-center">
+      <section data-testid="hero-section" className="mx-auto max-w-6xl px-4 pt-20 pb-16 text-center" aria-label="Hero section introducing GitMarkdown">
         <div className="mx-auto max-w-3xl">
           <div className="mb-6 inline-flex items-center rounded-full border px-3 py-1 text-sm text-muted-foreground">
             <Sparkles className="mr-1.5 h-3.5 w-3.5 text-yellow-500" />
             Now with AI-powered editing
           </div>
-          <h1 className="mb-6 text-4xl font-bold tracking-tight sm:text-5xl lg:text-6xl">
+          <h1 data-testid="hero-heading" className="mb-6 text-4xl font-bold tracking-tight sm:text-5xl lg:text-6xl">
             Google Docs meets GitHub
             <br />
             <span className="text-muted-foreground">for Markdown</span>
           </h1>
-          <p className="mb-8 text-lg text-muted-foreground max-w-2xl mx-auto">
+          <p data-testid="hero-description" className="mb-8 text-lg text-muted-foreground max-w-2xl mx-auto">
             A collaborative markdown editor with two-way GitHub sync, real-time collaboration, AI features, and inline reviews. Write better docs, together.
           </p>
           <div className="flex items-center justify-center gap-3">
-            <Link href={ctaHref}>
+            <Link href={ctaHref} data-testid="hero-get-started">
               <Button size="lg" className="h-11 px-6">
                 {!isLoggedIn && <Github className="mr-2 h-4 w-4" />}
                 {ctaLabel}
               </Button>
             </Link>
-            <Link href="#features">
+            <Link href="#features" data-testid="hero-learn-more">
               <Button variant="outline" size="lg" className="h-11 px-6">
                 Learn More
                 <ArrowRight className="ml-2 h-4 w-4" />
@@ -661,15 +706,15 @@ export default function LandingPage() {
       </section>
 
       {/* Interactive Preview */}
-      <section className="mx-auto max-w-5xl px-4 pb-24">
+      <section data-testid="interactive-preview-section" className="mx-auto max-w-5xl px-4 pb-24" aria-label="Interactive demo of the GitMarkdown editor">
         <InteractivePreview />
       </section>
 
       {/* Bento Feature Grid */}
-      <section id="features" className="border-t bg-muted/20 py-24">
+      <section id="features" data-testid="features-section" className="border-t bg-muted/20 py-24" aria-label="Feature highlights for GitMarkdown">
         <div className="mx-auto max-w-6xl px-4">
           <div className="mb-16 text-center">
-            <h2 className="mb-3 text-3xl font-bold">Everything you need for collaborative docs</h2>
+            <h2 data-testid="features-heading" className="mb-3 text-3xl font-bold">Everything you need for collaborative docs</h2>
             <p className="text-muted-foreground">
               Built for teams that write markdown and use GitHub.
             </p>
@@ -678,7 +723,7 @@ export default function LandingPage() {
           {/* Bento grid */}
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
             {/* GitHub Sync - large */}
-            <div className="lg:col-span-2 rounded-xl border bg-card p-6 transition-shadow hover:shadow-md">
+            <div data-testid="feature-github-sync" className="lg:col-span-2 rounded-xl border bg-card p-6 transition-shadow hover:shadow-md">
               <div className="flex items-center gap-2 mb-1">
                 <GitBranch className="h-5 w-5 text-primary" />
                 <h3 className="font-semibold">Two-Way GitHub Sync</h3>
@@ -690,7 +735,7 @@ export default function LandingPage() {
             </div>
 
             {/* Real-time Collab */}
-            <div className="rounded-xl border bg-card p-6 transition-shadow hover:shadow-md">
+            <div data-testid="feature-real-time-collaboration" className="rounded-xl border bg-card p-6 transition-shadow hover:shadow-md">
               <div className="flex items-center gap-2 mb-1">
                 <Users className="h-5 w-5 text-primary" />
                 <h3 className="font-semibold">Real-Time Collaboration</h3>
@@ -702,7 +747,7 @@ export default function LandingPage() {
             </div>
 
             {/* Comments */}
-            <div className="rounded-xl border bg-card p-6 transition-shadow hover:shadow-md">
+            <div data-testid="feature-inline-comments" className="rounded-xl border bg-card p-6 transition-shadow hover:shadow-md">
               <div className="flex items-center gap-2 mb-1">
                 <MessageSquare className="h-5 w-5 text-primary" />
                 <h3 className="font-semibold">Inline Comments</h3>
@@ -714,7 +759,7 @@ export default function LandingPage() {
             </div>
 
             {/* AI - large */}
-            <div className="lg:col-span-2 rounded-xl border bg-card p-6 transition-shadow hover:shadow-md">
+            <div data-testid="feature-ai-powered-editing" className="lg:col-span-2 rounded-xl border bg-card p-6 transition-shadow hover:shadow-md">
               <div className="flex items-center gap-2 mb-1">
                 <Sparkles className="h-5 w-5 text-primary" />
                 <h3 className="font-semibold">AI-Powered Editing</h3>
@@ -726,7 +771,7 @@ export default function LandingPage() {
             </div>
 
             {/* Rich Editor */}
-            <div className="rounded-xl border bg-card p-6 transition-shadow hover:shadow-md">
+            <div data-testid="feature-rich-markdown-editor" className="rounded-xl border bg-card p-6 transition-shadow hover:shadow-md">
               <div className="flex items-center gap-2 mb-1">
                 <Code className="h-5 w-5 text-primary" />
                 <h3 className="font-semibold">Rich Markdown Editor</h3>
@@ -738,7 +783,7 @@ export default function LandingPage() {
             </div>
 
             {/* Version History */}
-            <div className="lg:col-span-2 rounded-xl border bg-card p-6 transition-shadow hover:shadow-md">
+            <div data-testid="feature-version-history" className="lg:col-span-2 rounded-xl border bg-card p-6 transition-shadow hover:shadow-md">
               <div className="flex items-center gap-2 mb-1">
                 <History className="h-5 w-5 text-primary" />
                 <h3 className="font-semibold">Version History & Diff</h3>
@@ -753,17 +798,17 @@ export default function LandingPage() {
       </section>
 
       {/* FAQ */}
-      <section id="faq" className="py-24">
+      <section id="faq" data-testid="faq-section" className="py-24" aria-label="Frequently asked questions about GitMarkdown">
         <div className="mx-auto max-w-3xl px-4">
           <div className="mb-12 text-center">
-            <h2 className="mb-3 text-3xl font-bold">Frequently Asked Questions</h2>
+            <h2 data-testid="faq-heading" className="mb-3 text-3xl font-bold">Frequently Asked Questions</h2>
             <p className="text-muted-foreground">
               Everything you need to know about GitMarkdown.
             </p>
           </div>
           <Accordion type="single" collapsible className="w-full">
             {faqItems.map((item, i) => (
-              <AccordionItem key={i} value={`faq-${i}`}>
+              <AccordionItem key={i} value={`faq-${i}`} data-testid={`faq-item-${i}`}>
                 <AccordionTrigger className="text-left">{item.q}</AccordionTrigger>
                 <AccordionContent className="text-muted-foreground">
                   {item.a}
@@ -775,13 +820,13 @@ export default function LandingPage() {
       </section>
 
       {/* CTA */}
-      <section className="border-t bg-muted/20 py-24">
+      <section data-testid="cta-section" className="border-t bg-muted/20 py-24" aria-label="Call to action to sign up for GitMarkdown">
         <div className="mx-auto max-w-2xl text-center">
           <h2 className="mb-4 text-3xl font-bold">Ready to write better docs?</h2>
           <p className="mb-8 text-muted-foreground">
             Connect your GitHub repos and start collaborating in minutes.
           </p>
-          <Link href={ctaHref}>
+          <Link href={ctaHref} data-testid="cta-get-started">
             <Button size="lg" className="h-11 px-8">
               {!isLoggedIn && <Github className="mr-2 h-5 w-5" />}
               {isLoggedIn ? 'Go to Dashboard' : 'Get Started Free'}
@@ -791,7 +836,7 @@ export default function LandingPage() {
       </section>
 
       {/* Footer */}
-      <footer className="border-t py-8">
+      <footer data-testid="footer" className="border-t py-8" aria-label="Footer with project information and credits">
         <div className="mx-auto flex max-w-6xl items-center justify-between px-4">
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <LogoMark className="h-4 w-4" />

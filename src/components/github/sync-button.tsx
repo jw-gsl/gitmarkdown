@@ -10,7 +10,6 @@ import {
   ChevronDown,
   AlertCircle,
   Check,
-  CloudOff,
   Circle,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -31,6 +30,7 @@ interface SyncButtonProps {
   onPush: () => Promise<void>;
   onCreatePR: () => void;
   onCreateBranch?: () => void;
+  onOpenAutoSaveSettings?: () => void;
 }
 
 type EffectiveStatus = 'synced' | 'local-changes' | 'syncing' | 'error' | 'auto-commit-off';
@@ -78,12 +78,12 @@ const statusStyles: Record<EffectiveStatus, { icon: React.ReactNode; buttonClass
     buttonClass: 'border-red-200 bg-red-50 text-red-700 hover:bg-red-100 dark:border-red-900 dark:bg-red-950/30 dark:text-red-400 dark:hover:bg-red-950/50',
   },
   'auto-commit-off': {
-    icon: <CloudOff className="h-3.5 w-3.5" />,
+    icon: <Circle className="h-2 w-2 fill-current" />,
     buttonClass: 'border-orange-200 bg-orange-50 text-orange-700 hover:bg-orange-100 dark:border-orange-900 dark:bg-orange-950/30 dark:text-orange-400 dark:hover:bg-orange-950/50',
   },
 };
 
-export function SyncButton({ onPull, onPush, onCreatePR, onCreateBranch }: SyncButtonProps) {
+export function SyncButton({ onPull, onPush, onCreatePR, onCreateBranch, onOpenAutoSaveSettings }: SyncButtonProps) {
   const { isSyncing, currentBranch, syncError } = useSyncStore();
   const { dirtyFiles } = useFileStore();
   const { autoCommitDelay } = useSettingsStore();
@@ -122,6 +122,9 @@ export function SyncButton({ onPull, onPush, onCreatePR, onCreateBranch }: SyncB
               <Button
                 variant="outline"
                 size="sm"
+                data-testid="sync-button"
+                aria-label={`Sync: ${label}`}
+                aria-busy={status === 'syncing'}
                 className={`h-8 gap-1.5 transition-colors ${styles.buttonClass}`}
                 disabled={isSyncing}
               >
@@ -132,7 +135,23 @@ export function SyncButton({ onPull, onPush, onCreatePR, onCreateBranch }: SyncB
             </DropdownMenuTrigger>
           </TooltipTrigger>
           <TooltipContent side="bottom">
-            <p className="text-xs">{tooltipText}</p>
+            <p className="text-xs">
+              {tooltipText}
+              {status === 'auto-commit-off' && onOpenAutoSaveSettings && (
+                <>
+                  {' — '}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onOpenAutoSaveSettings();
+                    }}
+                    className="underline underline-offset-2 hover:opacity-70 transition-opacity cursor-pointer"
+                  >
+                    Turn on
+                  </button>
+                </>
+              )}
+            </p>
           </TooltipContent>
         </Tooltip>
       </TooltipProvider>
@@ -147,22 +166,22 @@ export function SyncButton({ onPull, onPush, onCreatePR, onCreateBranch }: SyncB
           </>
         )}
         <DropdownMenuSeparator />
-        <DropdownMenuItem onClick={handlePull} disabled={pulling}>
+        <DropdownMenuItem data-testid="sync-pull" aria-label="Pull latest changes from GitHub" onClick={handlePull} disabled={pulling}>
           {pulling ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ArrowDownToLine className="mr-2 h-4 w-4" />}
           Pull from GitHub
         </DropdownMenuItem>
-        <DropdownMenuItem onClick={handlePush} disabled={pushing || dirtyFiles.size === 0}>
+        <DropdownMenuItem data-testid="sync-push" aria-label={`Push changes to ${currentBranch}`} onClick={handlePush} disabled={pushing || dirtyFiles.size === 0}>
           {pushing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ArrowUpFromLine className="mr-2 h-4 w-4" />}
           Push to {currentBranch}
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         {onCreateBranch && (
-          <DropdownMenuItem onClick={onCreateBranch}>
+          <DropdownMenuItem data-testid="sync-create-branch" aria-label="Create a new branch" onClick={onCreateBranch}>
             <GitBranch className="mr-2 h-4 w-4" />
             Create new branch
           </DropdownMenuItem>
         )}
-        <DropdownMenuItem onClick={onCreatePR}>
+        <DropdownMenuItem data-testid="sync-create-pr" aria-label="Create a new pull request" onClick={onCreatePR}>
           <GitPullRequest className="mr-2 h-4 w-4" />
           Create Pull Request
         </DropdownMenuItem>

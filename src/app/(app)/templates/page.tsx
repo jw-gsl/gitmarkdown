@@ -35,17 +35,17 @@ export default function TemplatesPage() {
       <AppHeader />
       <div className="mx-auto max-w-5xl px-6 py-8">
         <div className="mb-8 flex items-center gap-4">
-          <Button variant="ghost" size="icon" onClick={() => router.back()}>
+          <Button data-testid="templates-back-button" aria-label="Go back to the previous page" variant="ghost" size="icon" onClick={() => router.back()}>
             <ArrowLeft className="h-4 w-4" />
           </Button>
           <div>
-            <h1 className="text-3xl font-bold">Templates</h1>
+            <h1 data-testid="templates-heading" className="text-3xl font-bold">Templates</h1>
             <p className="mt-1 text-muted-foreground">Start with a pre-built template for common document types.</p>
           </div>
         </div>
 
         {Object.entries(categorized).map(([category, categoryTemplates]) => (
-          <div key={category} className="mb-8">
+          <div key={category} className="mb-8" data-testid={`template-category-${category.toLowerCase().replace(/\s+/g, '-')}`}>
             <h2 className="mb-4 text-lg font-semibold">{category}</h2>
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
               {categoryTemplates.map((template) => {
@@ -53,6 +53,9 @@ export default function TemplatesPage() {
                 return (
                   <Card
                     key={template.id}
+                    data-testid={`template-card-${template.id}`}
+                    aria-label={`${template.name} template: ${template.description}. Click to preview.`}
+                    aria-expanded={preview?.id === template.id}
                     className="cursor-pointer transition-shadow hover:shadow-md"
                     onClick={() => setPreview(preview?.id === template.id ? null : template)}
                   >
@@ -73,7 +76,13 @@ export default function TemplatesPage() {
                           <pre className="max-h-48 overflow-auto rounded border bg-muted p-3 text-xs">
                             {template.content}
                           </pre>
-                          <Button size="sm" className="w-full" onClick={() => handleUseTemplate(template)}>
+                          <Button
+                            data-testid={`use-template-${template.id}`}
+                            aria-label={`Use the ${template.name} template and insert it into the editor`}
+                            size="sm"
+                            className="w-full"
+                            onClick={() => handleUseTemplate(template)}
+                          >
                             Use Template
                           </Button>
                         </div>

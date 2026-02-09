@@ -9,6 +9,8 @@ import { useGitHubCommits } from '@/hooks/use-github';
 import { useUIStore } from '@/stores/ui-store';
 import { toast } from 'sonner';
 import type { GitHubCommit } from '@/types';
+import { PierrePatchDiffView } from '@/components/diff/pierre-diff';
+import { ViewModeToggle } from '@/components/diff/view-mode-toggle';
 
 interface CommitFile {
   filename: string;
@@ -36,201 +38,6 @@ const statusConfig: Record<string, { label: string; icon: React.ElementType; col
   modified: { label: 'Modified', icon: FileEdit, color: 'text-yellow-600' },
   renamed: { label: 'Renamed', icon: FileText, color: 'text-blue-600' },
 };
-
-// ─── Diff cell types ───
-
-interface DiffCell {
-  num?: number;
-  content: string;
-  type: 'added' | 'removed' | 'context' | 'hunk' | 'empty';
-}
-
-function cellBg(type: string, side?: 'left' | 'right'): string {
-  switch (type) {
-    case 'added':
-      return 'bg-green-50 dark:bg-green-950/30';
-    case 'removed':
-      return 'bg-red-50 dark:bg-red-950/30';
-    case 'hunk':
-      return 'bg-blue-50 dark:bg-blue-950/20';
-    case 'empty':
-      return 'bg-muted/20';
-    default:
-      return '';
-  }
-}
-
-function parseSideBySide(patch: string): { left: DiffCell; right: DiffCell }[] {
-  const lines = patch.split('\n');
-  const rows: { left: DiffCell; right: DiffCell }[] = [];
-  let leftNum = 0;
-  let rightNum = 0;
-
-  let i = 0;
-  while (i < lines.length) {
-    const line = lines[i];
-
-    if (line.startsWith('@@')) {
-      const match = line.match(/@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@(.*)/);
-      if (match) {
-        leftNum = parseInt(match[1], 10);
-        rightNum = parseInt(match[2], 10);
-      }
-      rows.push({
-        left: { content: line, type: 'hunk' },
-        right: { content: '', type: 'hunk' },
-      });
-      i++;
-      continue;
-    }
-
-    // Collect consecutive removed/added blocks to pair them
-    if (line.startsWith('-') && !line.startsWith('---')) {
-      const removed: string[] = [];
-      const added: string[] = [];
-
-      while (i < lines.length && lines[i].startsWith('-') && !lines[i].startsWith('---')) {
-        removed.push(lines[i].slice(1));
-        i++;
-      }
-      while (i < lines.length && lines[i].startsWith('+') && !lines[i].startsWith('+++')) {
-        added.push(lines[i].slice(1));
-        i++;
-      }
-
-      const maxLen = Math.max(removed.length, added.length);
-      for (let j = 0; j < maxLen; j++) {
-        rows.push({
-          left:
-            j < removed.length
-              ? { num: leftNum++, content: removed[j], type: 'removed' }
-              : { content: '', type: 'empty' },
-          right:
-            j < added.length
-              ? { num: rightNum++, content: added[j], type: 'added' }
-              : { content: '', type: 'empty' },
-        });
-      }
-      continue;
-    }
-
-    if (line.startsWith('+') && !line.startsWith('+++')) {
-      rows.push({
-        left: { content: '', type: 'empty' },
-        right: { num: rightNum++, content: line.slice(1), type: 'added' },
-      });
-      i++;
-      continue;
-    }
-
-    // Context line
-    rows.push({
-      left: { num: leftNum++, content: line, type: 'context' },
-      right: { num: rightNum++, content: line, type: 'context' },
-    });
-    i++;
-  }
-
-  return rows;
-}
-
-// Side-by-side diff table (desktop)
-function SideBySideTable({ patch }: { patch: string }) {
-  const rows = parseSideBySide(patch);
-
-  return (
-    <table className="w-full text-xs font-mono border-collapse">
-      <tbody>
-        {rows.map((row, i) => {
-          if (row.left.type === 'hunk') {
-            return (
-              <tr key={i} className={cellBg('hunk')}>
-                <td colSpan={4} className="px-2 py-0.5 text-blue-600 text-[10px]">
-                  {row.left.content}
-                </td>
-              </tr>
-            );
-          }
-          return (
-            <tr key={i}>
-              <td
-                className={`w-8 text-right pr-1.5 pl-1 select-none text-muted-foreground/60 ${cellBg(row.left.type)}`}
-              >
-                {row.left.num}
-              </td>
-              <td
-                className={`whitespace-pre-wrap px-2 py-0.5 border-r border-border/50 w-1/2 ${cellBg(row.left.type)}`}
-              >
-                {row.left.content}
-              </td>
-              <td
-                className={`w-8 text-right pr-1.5 pl-1 select-none text-muted-foreground/60 border-l border-border/50 ${cellBg(row.right.type)}`}
-              >
-                {row.right.num}
-              </td>
-              <td className={`whitespace-pre-wrap px-2 py-0.5 w-1/2 ${cellBg(row.right.type)}`}>
-                {row.right.content}
-              </td>
-            </tr>
-          );
-        })}
-      </tbody>
-    </table>
-  );
-}
-
-// Unified diff table (mobile/tablet)
-function UnifiedTable({ patch }: { patch: string }) {
-  const lines = patch.split('\n');
-  return (
-    <table className="w-full text-xs font-mono">
-      <tbody>
-        {lines.map((line, i) => {
-          let bg = '';
-          let prefix = ' ';
-          let prefixColor = '';
-          if (line.startsWith('+') && !line.startsWith('+++')) {
-            bg = 'bg-green-50 dark:bg-green-950/30';
-            prefix = '+';
-            prefixColor = 'text-green-600';
-          } else if (line.startsWith('-') && !line.startsWith('---')) {
-            bg = 'bg-red-50 dark:bg-red-950/30';
-            prefix = '-';
-            prefixColor = 'text-red-600';
-          } else if (line.startsWith('@@')) {
-            bg = 'bg-blue-50 dark:bg-blue-950/20';
-            prefixColor = 'text-blue-600';
-          }
-          return (
-            <tr key={i} className={bg}>
-              <td className="w-4 select-none text-center">
-                {prefixColor ? <span className={prefixColor}>{prefix}</span> : null}
-              </td>
-              <td className="whitespace-pre-wrap px-2 py-0.5">
-                {line.startsWith('+') || line.startsWith('-') ? line.slice(1) : line}
-              </td>
-            </tr>
-          );
-        })}
-      </tbody>
-    </table>
-  );
-}
-
-function PatchView({ patch }: { patch: string }) {
-  return (
-    <>
-      {/* Side-by-side on md+ screens */}
-      <div className="hidden md:block overflow-x-auto">
-        <SideBySideTable patch={patch} />
-      </div>
-      {/* Unified on small screens */}
-      <div className="md:hidden overflow-x-auto">
-        <UnifiedTable patch={patch} />
-      </div>
-    </>
-  );
-}
 
 // ─── Diff statistics ───
 
@@ -305,11 +112,13 @@ function VersionSlider({
   selectedSha,
   onSelect,
   commitCache,
+  filePath,
 }: {
   commits: GitHubCommit[];
   selectedSha: string | null;
   onSelect: (sha: string) => void;
   commitCache: Map<string, CommitDetail>;
+  filePath?: string;
 }) {
   const trackRef = useRef<HTMLDivElement>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -327,15 +136,18 @@ function VersionSlider({
   const activeIndex = hoverIndex ?? (selectedIndex >= 0 ? selectedIndex : ordered.length - 1);
   const progress = ordered.length > 1 ? activeIndex / (ordered.length - 1) : 1;
 
-  // Waveform heights based on cached diff stats
+  // Waveform heights based on cached diff stats (per-file when filePath is set)
   const waveformHeights = useMemo(() => {
     return ordered.map((commit) => {
       const cached = commitCache.get(commit.sha);
       if (!cached) return 0.1;
-      const stats = computeDiffStats(cached.files);
+      const files = filePath
+        ? cached.files.filter((f) => f.filename === filePath)
+        : cached.files;
+      const stats = computeDiffStats(files);
       return stats.additions + stats.deletions;
     });
-  }, [ordered, commitCache]);
+  }, [ordered, commitCache, filePath]);
 
   const maxChanges = Math.max(...waveformHeights, 1);
   const normalizedHeights = useMemo(
@@ -443,14 +255,14 @@ function VersionSlider({
           expanded ? 'max-h-8 opacity-100 mb-1.5' : 'max-h-0 opacity-0 mb-0'
         }`}
       >
-        <span className="text-[11px] text-muted-foreground">
+        <span className="text-xs text-muted-foreground">
           Version {activeIndex + 1} of {ordered.length}
         </span>
         {selectedIndex < ordered.length - 1 && (
           <Button
             variant="ghost"
             size="sm"
-            className="h-5 text-[11px] gap-1 px-1.5"
+            className="h-5 text-xs gap-1 px-1.5"
             onClick={() => onSelect(ordered[ordered.length - 1].sha)}
           >
             View latest
@@ -462,8 +274,8 @@ function VersionSlider({
       {/* Waveform track */}
       <div
         ref={trackRef}
-        className="relative cursor-pointer touch-none select-none overflow-visible"
-        style={{ height: expanded ? 24 : 3, transition: 'height 0.3s ease-out' }}
+        className="relative cursor-pointer touch-none select-none overflow-visible flex items-center"
+        style={{ height: expanded ? 24 : 6, transition: 'height 0.3s ease-out' }}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
@@ -493,11 +305,14 @@ function VersionSlider({
 
         {/* Handle */}
         <div
-          className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 rounded-full bg-white border-2 border-green-500 shadow-md z-10 transition-[left] duration-75"
+          className="absolute rounded-full bg-background border-2 border-green-500 shadow-md z-10"
           style={{
             left: `${progress * 100}%`,
+            top: '50%',
+            transform: 'translate(-50%, -50%)',
             width: expanded ? 14 : 8,
             height: expanded ? 14 : 8,
+            transition: 'left 75ms, width 0.3s, height 0.3s',
           }}
         />
 
@@ -515,17 +330,17 @@ function VersionSlider({
             </p>
             {stats ? (
               <div className="mt-0.5">
-                <p className="text-[11px] text-green-500 whitespace-nowrap">
+                <p className="text-xs text-green-500 whitespace-nowrap">
                   {stats.additions} addition{stats.additions !== 1 ? 's' : ''}{' '}
                   <span className="text-green-400/70">+++</span>
                 </p>
-                <p className="text-[11px] text-red-400 whitespace-nowrap">
+                <p className="text-xs text-red-400 whitespace-nowrap">
                   {stats.deletions} deletion{stats.deletions !== 1 ? 's' : ''}{' '}
                   <span className="text-red-300/70">---</span>
                 </p>
               </div>
             ) : (
-              <p className="text-[11px] text-muted-foreground truncate max-w-[200px]">
+              <p className="text-xs text-muted-foreground truncate max-w-[200px]">
                 {displayCommit.message.split('\n')[0]}
               </p>
             )}
@@ -589,12 +404,17 @@ export function CommitDiffView({ owner, repo, filePath }: CommitDiffViewProps) {
     [setDiffViewCommitSha]
   );
 
-  const diffStats = commit ? computeDiffStats(commit.files) : null;
+  // When viewing a specific file, only count that file's stats
+  const diffStats = commit
+    ? computeDiffStats(
+        filePath ? commit.files.filter((f) => f.filename === filePath) : commit.files
+      )
+    : null;
 
   if (!diffViewCommitSha) return null;
 
   return (
-    <div className="flex h-full flex-col">
+    <div data-testid="commit-diff-view" aria-label="Commit diff viewer" className="flex h-full flex-col">
       {/* Header */}
       <div className="flex items-center justify-between border-b px-4 py-2">
         <div className="flex items-center gap-2 min-w-0">
@@ -618,6 +438,7 @@ export function CommitDiffView({ owner, repo, filePath }: CommitDiffViewProps) {
           )}
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
+          <ViewModeToggle />
           {commit?.html_url && (
             <Button
               variant="outline"
@@ -629,7 +450,7 @@ export function CommitDiffView({ owner, repo, filePath }: CommitDiffViewProps) {
               View on GitHub
             </Button>
           )}
-          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={handleClose}>
+          <Button variant="ghost" size="icon" data-testid="diff-view-close" aria-label="Close commit diff view" className="h-7 w-7" onClick={handleClose}>
             <X className="h-3.5 w-3.5" />
           </Button>
         </div>
@@ -642,6 +463,7 @@ export function CommitDiffView({ owner, repo, filePath }: CommitDiffViewProps) {
           selectedSha={diffViewCommitSha}
           onSelect={handleSliderSelect}
           commitCache={commitCache}
+          filePath={filePath}
         />
       )}
 
@@ -653,33 +475,47 @@ export function CommitDiffView({ owner, repo, filePath }: CommitDiffViewProps) {
       ) : commit ? (
         <ScrollArea className={`flex-1 transition-opacity duration-200 ${loading ? 'opacity-40' : 'opacity-100'}`}>
           <div className="p-4 space-y-4">
-            {commit.files.map((file) => {
-              const config = statusConfig[file.status] || statusConfig.modified;
-              const Icon = config.icon;
-              return (
-                <div key={file.filename} className="rounded-lg border overflow-hidden">
-                  <div className="flex items-center gap-2 border-b bg-muted/30 px-3 py-2">
-                    <Icon className={`h-3.5 w-3.5 ${config.color}`} />
-                    <span className="text-xs font-mono font-medium truncate">{file.filename}</span>
-                    <Badge variant="outline" className="text-[10px] ml-auto shrink-0">
-                      {config.label}
-                    </Badge>
-                  </div>
-                  {file.patch ? (
-                    <PatchView patch={file.patch} />
-                  ) : (
-                    <div className="p-3 text-xs text-muted-foreground text-center">
-                      Binary file or no diff available
+            {(() => {
+              // When a specific file is open, only show that file's diff
+              const filesToShow = filePath
+                ? commit.files.filter((f) => f.filename === filePath)
+                : commit.files;
+              return filesToShow.map((file) => {
+                const config = statusConfig[file.status] || statusConfig.modified;
+                const Icon = config.icon;
+                return (
+                  <div key={file.filename} className="rounded-lg border overflow-hidden">
+                    <div className="flex items-center gap-2 border-b bg-muted/30 px-3 py-2">
+                      <Icon className={`h-3.5 w-3.5 ${config.color}`} />
+                      <span className="text-xs font-mono font-medium truncate">{file.filename}</span>
+                      <Badge variant="outline" className="text-xs ml-auto shrink-0">
+                        {config.label}
+                      </Badge>
                     </div>
-                  )}
-                </div>
-              );
-            })}
-            {commit.files.length === 0 && (
-              <div className="text-center text-sm text-muted-foreground py-8">
-                No file changes in this commit
-              </div>
-            )}
+                    {file.patch ? (
+                      <PierrePatchDiffView patch={file.patch} fileName={file.filename} />
+                    ) : (
+                      <div className="p-3 text-xs text-muted-foreground text-center">
+                        Binary file or no diff available
+                      </div>
+                    )}
+                  </div>
+                );
+              });
+            })()}
+            {(() => {
+              const filesToShow = filePath
+                ? commit.files.filter((f) => f.filename === filePath)
+                : commit.files;
+              if (filesToShow.length === 0) {
+                return (
+                  <div className="text-center text-sm text-muted-foreground py-8">
+                    {filePath ? 'This file was not changed in this commit' : 'No file changes in this commit'}
+                  </div>
+                );
+              }
+              return null;
+            })()}
           </div>
         </ScrollArea>
       ) : null}

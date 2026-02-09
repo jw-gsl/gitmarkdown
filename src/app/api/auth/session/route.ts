@@ -6,7 +6,7 @@ const ENCRYPTION_KEY = process.env.GITHUB_TOKEN_ENCRYPTION_KEY
   ? crypto.createHash('sha256').update(process.env.GITHUB_TOKEN_ENCRYPTION_KEY).digest()
   : crypto.createHash('sha256').update(process.env.FIREBASE_ADMIN_PRIVATE_KEY || '').digest();
 
-function encrypt(text: string): string {
+export function encrypt(text: string): string {
   const iv = crypto.randomBytes(16);
   const cipher = crypto.createCipheriv('aes-256-gcm', ENCRYPTION_KEY, iv);
   const encrypted = Buffer.concat([cipher.update(text, 'utf8'), cipher.final()]);
@@ -15,13 +15,23 @@ function encrypt(text: string): string {
 }
 
 export function decrypt(encryptedText: string): string {
-  const [ivHex, tagHex, dataHex] = encryptedText.split(':');
-  const iv = Buffer.from(ivHex, 'hex');
-  const tag = Buffer.from(tagHex, 'hex');
-  const data = Buffer.from(dataHex, 'hex');
-  const decipher = crypto.createDecipheriv('aes-256-gcm', ENCRYPTION_KEY, iv);
-  decipher.setAuthTag(tag);
-  return Buffer.concat([decipher.update(data), decipher.final()]).toString('utf8');
+  try {
+    const parts = encryptedText.split(':');
+    if (parts.length !== 3) {
+      console.error('decrypt: malformed input, expected 3 colon-separated parts');
+      return '';
+    }
+    const [ivHex, tagHex, dataHex] = parts;
+    const iv = Buffer.from(ivHex, 'hex');
+    const tag = Buffer.from(tagHex, 'hex');
+    const data = Buffer.from(dataHex, 'hex');
+    const decipher = crypto.createDecipheriv('aes-256-gcm', ENCRYPTION_KEY, iv);
+    decipher.setAuthTag(tag);
+    return Buffer.concat([decipher.update(data), decipher.final()]).toString('utf8');
+  } catch (error) {
+    console.error('decrypt: failed to decrypt:', error);
+    return '';
+  }
 }
 
 export async function POST(request: NextRequest) {

@@ -105,20 +105,16 @@ export function CommentSidebar({
   if (!isOpen) return null;
 
   return (
-    <div className="flex h-full w-80 flex-col border-l bg-background">
+    <aside data-testid="comment-sidebar" aria-label="Comments panel" className="flex h-full w-full flex-col bg-background">
       {/* Header */}
       <div className="border-b">
-        <div className="flex items-center justify-between px-4 pt-3 pb-2">
-          <span className="font-semibold text-sm">Comments</span>
-          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onClose}>
-            <X className="h-3.5 w-3.5" />
-          </Button>
-        </div>
-
         {/* Tabs */}
-        <div className="flex items-center px-4 pb-2">
+        <div className="flex items-center px-4 pt-2 pb-2">
           <div className="flex gap-4">
             <button
+              data-testid="comments-tab-all"
+              aria-label="Show all comments"
+              aria-pressed={activeTab === 'all'}
               className={`pb-1.5 text-xs font-medium border-b-2 transition-colors ${
                 activeTab === 'all'
                   ? 'border-primary text-foreground'
@@ -129,6 +125,9 @@ export function CommentSidebar({
               All comments
             </button>
             <button
+              data-testid="comments-tab-foryou"
+              aria-label="Show comments addressed to you"
+              aria-pressed={activeTab === 'foryou'}
               className={`pb-1.5 text-xs font-medium border-b-2 transition-colors ${
                 activeTab === 'foryou'
                   ? 'border-primary text-foreground'
@@ -147,6 +146,8 @@ export function CommentSidebar({
             <Search className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
             <input
               ref={searchInputRef}
+              data-testid="comments-search"
+              aria-label="Search comments"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Search comments..."
@@ -236,6 +237,6 @@ export function CommentSidebar({
           )}
         </div>
       </ScrollArea>
-    </div>
+    </aside>
   );
 }

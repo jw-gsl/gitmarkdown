@@ -17,8 +17,8 @@ export function EditorHeader({
   if (autoSaveStatus === 'idle' || autoSaveStatus === 'error') return null;
 
   return (
-    <div className="flex items-center justify-end border-b px-4 py-1.5 gap-3">
-      <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+    <div className="flex items-center justify-end border-b px-4 py-1.5 gap-3" data-testid="editor-header">
+      <span className="flex items-center gap-1.5 text-xs text-muted-foreground" data-testid="save-status" role="status" aria-live="polite" aria-busy={autoSaveStatus === 'saving'}>
         {autoSaveStatus === 'saving' && (
           <>
             <Loader2 className="h-3 w-3 animate-spin" />

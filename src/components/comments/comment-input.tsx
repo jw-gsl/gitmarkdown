@@ -32,6 +32,8 @@ export function CommentInput({ onSubmit, onCancel, placeholder = 'Write a commen
     <div className="space-y-2">
       <Textarea
         ref={textareaRef}
+        data-testid="comment-input"
+        aria-label="Write a comment"
         value={content}
         onChange={(e) => setContent(e.target.value)}
         placeholder={placeholder}
@@ -52,7 +54,7 @@ export function CommentInput({ onSubmit, onCancel, placeholder = 'Write a commen
             Cancel
           </Button>
         )}
-        <Button size="sm" className="h-7 text-xs" onClick={handleSubmit} disabled={!content.trim()}>
+        <Button size="sm" data-testid="comment-submit" aria-label="Submit comment" className="h-7 text-xs" onClick={handleSubmit} disabled={!content.trim()}>
           <Send className="mr-1 h-3 w-3" />
           Send
         </Button>

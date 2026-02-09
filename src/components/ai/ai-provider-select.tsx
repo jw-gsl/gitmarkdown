@@ -23,7 +23,7 @@ export function AIProviderSelect() {
 
   return (
     <Select value={aiModel} onValueChange={handleChange}>
-      <SelectTrigger className="h-8 text-xs">
+      <SelectTrigger data-testid="ai-model-select" aria-label="Select AI model" className="h-8 text-xs">
         <SelectValue placeholder="Select model" />
       </SelectTrigger>
       <SelectContent>

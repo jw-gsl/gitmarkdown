@@ -33,7 +33,7 @@ export function UnsavedChangesDialog({
 }: UnsavedChangesDialogProps) {
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
-      <AlertDialogContent>
+      <AlertDialogContent data-testid="unsaved-changes-dialog">
         <AlertDialogHeader>
           <AlertDialogTitle className="flex items-center gap-2">
             <AlertTriangle className="h-5 w-5 text-destructive" />
@@ -60,7 +60,7 @@ export function UnsavedChangesDialog({
 
         <AlertDialogFooter>
           <AlertDialogCancel>Cancel</AlertDialogCancel>
-          <AlertDialogAction variant="destructive" onClick={onDiscard}>
+          <AlertDialogAction variant="destructive" data-testid="unsaved-discard" aria-label={actionLabel} onClick={onDiscard}>
             {actionLabel}
           </AlertDialogAction>
         </AlertDialogFooter>

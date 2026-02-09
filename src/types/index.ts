@@ -201,6 +201,14 @@ export interface AIEditResponse {
   explanation: string;
 }
 
+// Pending file operations (queued locally, executed on commit)
+export type PendingFileOp =
+  | { type: 'create'; path: string; content: string }
+  | { type: 'delete'; path: string; sha: string }
+  | { type: 'rename'; oldPath: string; newPath: string; sha: string; content: string }
+  | { type: 'move'; oldPath: string; newPath: string; sha: string; content: string }
+  | { type: 'duplicate'; newPath: string; content: string };
+
 // Editor types
 export interface EditorState {
   isReady: boolean;

@@ -85,9 +85,17 @@ export function CreateBranchDialog({
       await onCreateBranch(name.trim());
       onOpenChange(false);
     } catch (err) {
-      setError(
-        err instanceof Error ? err.message : 'Failed to create branch'
-      );
+      const raw = err instanceof Error ? err.message : 'Failed to create branch';
+      const msg = raw.replace(/\s*-\s*https:\/\/docs\.github\.com\S*/g, '').trim();
+      if (msg.includes('Reference already exists')) {
+        setError('A branch with this name already exists');
+      } else if (msg.includes('Bad credentials')) {
+        setError('Your GitHub session has expired. Please sign out and sign back in.');
+      } else if (msg.includes('Not Found')) {
+        setError('Repository not found. You may not have write access.');
+      } else {
+        setError(msg || 'Failed to create branch');
+      }
     } finally {
       setLoading(false);
     }
@@ -102,7 +110,7 @@ export function CreateBranchDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent data-testid="create-branch-dialog" className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Create New Branch</DialogTitle>
           <DialogDescription>
@@ -119,6 +127,7 @@ export function CreateBranchDialog({
             <Label htmlFor="branch-name">Branch name</Label>
             <Input
               id="branch-name"
+              data-testid="branch-name-input"
               value={name}
               onChange={(e) => handleNameChange(e.target.value)}
               onKeyDown={handleKeyDown}
@@ -144,6 +153,8 @@ export function CreateBranchDialog({
             Cancel
           </Button>
           <Button
+            data-testid="create-branch-submit"
+            aria-label="Create new branch"
             onClick={handleCreate}
             disabled={loading || !name.trim()}
           >

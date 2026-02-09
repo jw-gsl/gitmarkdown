@@ -70,8 +70,9 @@ export default function DashboardPage() {
   };
 
   return (
-    <div className="flex-1">
+    <div className="flex-1 flex flex-col overflow-hidden">
       <AppHeader />
+      <div className="flex-1 overflow-y-auto">
       <div className="mx-auto max-w-5xl px-6 py-8">
         <div className="mb-8">
           <h1 className="text-3xl font-bold">Dashboard</h1>
@@ -80,12 +81,15 @@ export default function DashboardPage() {
 
         {/* Connected Workspaces */}
         {workspaces.length > 0 && (
-          <div className="mb-10">
+          <div className="mb-10" data-testid="workspaces-section">
             <h2 className="mb-4 text-lg font-semibold">Your Workspaces</h2>
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
               {workspaces.map((workspace) => (
                 <Card
                   key={workspace.id}
+                  data-testid={`workspace-card-${workspace.repo}`}
+                  role="link"
+                  aria-label={`Open ${workspace.repoFullName} workspace in the editor`}
                   className="cursor-pointer transition-shadow hover:shadow-md"
                   onClick={() => handleOpenWorkspace(workspace)}
                 >
@@ -114,7 +118,15 @@ export default function DashboardPage() {
         <div>
           <div className="mb-4 flex items-center justify-between">
             <h2 className="text-lg font-semibold">Connect a Repository</h2>
-            <Button variant="outline" size="sm" onClick={fetchRepos} disabled={reposLoading}>
+            <Button
+              data-testid="refresh-repos-button"
+              aria-label="Refresh repository list from GitHub"
+              aria-busy={reposLoading}
+              variant="outline"
+              size="sm"
+              onClick={fetchRepos}
+              disabled={reposLoading}
+            >
               {reposLoading && <Loader2 className="mr-2 h-3 w-3 animate-spin" />}
               Refresh
             </Button>
@@ -124,6 +136,8 @@ export default function DashboardPage() {
             <div className="relative">
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <Input
+                data-testid="repo-search-input"
+                aria-label="Search repositories by name to filter the list below"
                 placeholder="Search repositories..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
@@ -133,7 +147,7 @@ export default function DashboardPage() {
           </div>
 
           {reposLoading ? (
-            <div className="space-y-3">
+            <div className="space-y-3" aria-busy="true" aria-label="Loading repositories from GitHub" role="status">
               {Array.from({ length: 5 }).map((_, i) => (
                 <Skeleton key={i} className="h-20 w-full rounded-lg" />
               ))}
@@ -145,6 +159,7 @@ export default function DashboardPage() {
                 return (
                   <div
                     key={repo.id}
+                    data-testid={`repo-row-${repo.full_name}`}
                     className="flex items-center justify-between rounded-lg border p-4 transition-colors hover:bg-muted/50"
                   >
                     <div className="flex-1">
@@ -170,6 +185,9 @@ export default function DashboardPage() {
                         <Badge variant="secondary">Connected</Badge>
                       ) : (
                         <Button
+                          data-testid={`connect-repo-${repo.full_name}`}
+                          aria-label={`Connect ${repo.full_name} repository to GitMarkdown`}
+                          aria-busy={connecting === repo.id}
                           size="sm"
                           onClick={() => handleConnectRepo(repo)}
                           disabled={connecting === repo.id}
@@ -187,13 +205,14 @@ export default function DashboardPage() {
                 );
               })}
               {filteredRepos.length === 0 && !reposLoading && (
-                <div className="py-8 text-center text-muted-foreground">
+                <div data-testid="repos-empty-state" role="status" className="py-8 text-center text-muted-foreground">
                   {searchQuery ? 'No repositories match your search.' : 'No repositories found.'}
                 </div>
               )}
             </div>
           )}
         </div>
+      </div>
       </div>
     </div>
   );

@@ -1,15 +1,18 @@
 'use client';
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useMemo } from 'react';
 import {
   Loader2,
-  ChevronDown,
-  ChevronRight,
   FileText,
-  Plus,
-  Minus,
+  FilePlus,
+  Trash2,
+  Pencil,
+  ArrowRight,
   Sparkles,
+  ChevronRight,
 } from 'lucide-react';
+import { diffLines } from 'diff';
+import type { PendingFileOp } from '@/types';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -23,24 +26,33 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from '@/components/ui/collapsible';
 import { useSettingsStore } from '@/stores/settings-store';
+import { PierreContentDiffView } from '@/components/diff/pierre-diff';
 
-interface FileChange {
+export interface ChangedFileInfo {
   path: string;
-  additions: number;
-  deletions: number;
+  original: string;
+  current: string;
+}
+
+function countDiffStats(original: string, current: string) {
+  const changes = diffLines(original, current);
+  let additions = 0;
+  let deletions = 0;
+  for (const change of changes) {
+    const count = change.count ?? 0;
+    if (change.added) additions += count;
+    if (change.removed) deletions += count;
+  }
+  return { additions, deletions };
 }
 
 interface CommitDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onCommit: (message: string, description: string) => Promise<void>;
-  changedFiles: string[];
+  changedFiles: ChangedFileInfo[];
+  pendingOps: PendingFileOp[];
 }
 
 export function CommitDialog({
@@ -48,6 +60,7 @@ export function CommitDialog({
   onOpenChange,
   onCommit,
   changedFiles,
+  pendingOps,
 }: CommitDialogProps) {
   const [message, setMessage] = useState('');
   const [description, setDescription] = useState('');
@@ -55,16 +68,21 @@ export function CommitDialog({
   const [generating, setGenerating] = useState(false);
   const [expandedFiles, setExpandedFiles] = useState<Set<string>>(new Set());
   const aiCommitMessages = useSettingsStore((s) => s.aiCommitMessages);
+  const totalChanges = changedFiles.length + pendingOps.length;
 
-  // Build file changes with simulated diff stats
-  const fileChanges: FileChange[] = changedFiles.map((f) => ({
-    path: f,
-    additions: Math.floor(Math.random() * 10) + 1,
-    deletions: Math.floor(Math.random() * 5),
-  }));
+  // Reset expanded state when dialog closes
+  useEffect(() => {
+    if (!open) setExpandedFiles(new Set());
+  }, [open]);
 
-  const totalAdditions = fileChanges.reduce((s, f) => s + f.additions, 0);
-  const totalDeletions = fileChanges.reduce((s, f) => s + f.deletions, 0);
+  // Pre-compute diff stats for all changed files
+  const diffStats = useMemo(() => {
+    const map = new Map<string, { additions: number; deletions: number }>();
+    for (const file of changedFiles) {
+      map.set(file.path, countDiffStats(file.original, file.current));
+    }
+    return map;
+  }, [changedFiles]);
 
   // Auto-generate AI commit message when dialog opens with AI toggle on
   useEffect(() => {
@@ -73,15 +91,6 @@ export function CommitDialog({
     }
   }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const toggleFile = useCallback((path: string) => {
-    setExpandedFiles((prev) => {
-      const next = new Set(prev);
-      if (next.has(path)) next.delete(path);
-      else next.add(path);
-      return next;
-    });
-  }, []);
-
   const handleGenerateAI = useCallback(async () => {
     setGenerating(true);
     try {
@@ -89,7 +98,7 @@ export function CommitDialog({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          changedFiles,
+          changedFiles: changedFiles.map((f) => f.path),
           provider: useSettingsStore.getState().aiProvider,
           modelId: useSettingsStore.getState().aiModel,
         }),
@@ -120,64 +129,101 @@ export function CommitDialog({
     }
   };
 
+  const toggleExpanded = useCallback((path: string) => {
+    setExpandedFiles((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) {
+        next.delete(path);
+      } else {
+        next.add(path);
+      }
+      return next;
+    });
+  }, []);
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent data-testid="commit-dialog" className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Commit Changes</DialogTitle>
           <DialogDescription>
-            Review and commit {changedFiles.length} file
-            {changedFiles.length !== 1 ? 's' : ''} to GitHub.
+            Review and commit {totalChanges} change
+            {totalChanges !== 1 ? 's' : ''} to GitHub.
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4">
-          {/* Changed files with diff summary */}
+          {/* Changed files list */}
           <div className="rounded-md border">
             <div className="flex items-center justify-between px-3 py-2 bg-muted/50">
               <span className="text-xs font-medium text-muted-foreground">
-                {changedFiles.length} file{changedFiles.length !== 1 ? 's' : ''} changed
-              </span>
-              <span className="flex items-center gap-2 text-xs">
-                <span className="flex items-center gap-0.5 text-green-600 dark:text-green-400">
-                  <Plus className="h-3 w-3" />
-                  {totalAdditions}
-                </span>
-                <span className="flex items-center gap-0.5 text-red-500">
-                  <Minus className="h-3 w-3" />
-                  {totalDeletions}
-                </span>
+                {totalChanges} change{totalChanges !== 1 ? 's' : ''}
               </span>
             </div>
-            <div className="divide-y max-h-40 overflow-y-auto">
-              {fileChanges.map((file) => (
-                <Collapsible
-                  key={file.path}
-                  open={expandedFiles.has(file.path)}
-                  onOpenChange={() => toggleFile(file.path)}
-                >
-                  <CollapsibleTrigger className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-accent/50 transition-colors">
-                    {expandedFiles.has(file.path) ? (
-                      <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" />
-                    ) : (
-                      <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground" />
-                    )}
-                    <FileText className="h-3 w-3 shrink-0 text-muted-foreground" />
-                    <span className="truncate font-mono">{file.path}</span>
-                    <span className="ml-auto flex items-center gap-1.5 shrink-0">
-                      <span className="text-green-600 dark:text-green-400">+{file.additions}</span>
-                      <span className="text-red-500">-{file.deletions}</span>
-                    </span>
-                  </CollapsibleTrigger>
-                  <CollapsibleContent>
-                    <div className="mx-3 mb-2 rounded bg-muted/30 p-2 text-[11px] font-mono">
-                      <div className="text-green-600 dark:text-green-400">
-                        + Modified content
-                      </div>
-                    </div>
-                  </CollapsibleContent>
-                </Collapsible>
+            <div className="divide-y max-h-[50vh] overflow-y-auto">
+              {/* Pending operations */}
+              {pendingOps.map((op, i) => (
+                <div key={`op-${i}`} className="flex w-full items-center gap-2 px-3 py-1.5 text-xs">
+                  {op.type === 'create' && <FilePlus className="h-3 w-3 shrink-0 text-green-500" />}
+                  {op.type === 'duplicate' && <FilePlus className="h-3 w-3 shrink-0 text-green-500" />}
+                  {op.type === 'delete' && <Trash2 className="h-3 w-3 shrink-0 text-red-500" />}
+                  {op.type === 'rename' && <Pencil className="h-3 w-3 shrink-0 text-blue-500" />}
+                  {op.type === 'move' && <ArrowRight className="h-3 w-3 shrink-0 text-blue-500" />}
+                  <span className="truncate font-mono">
+                    {op.type === 'rename' ? `${op.oldPath.split('/').pop()} → ${op.newPath.split('/').pop()}` :
+                     op.type === 'move' ? `${op.oldPath} → ${op.newPath.substring(0, op.newPath.lastIndexOf('/'))}` :
+                     op.type === 'delete' ? op.path :
+                     op.type === 'create' ? op.path :
+                     op.newPath}
+                  </span>
+                  <span className={`ml-auto shrink-0 text-xs font-medium ${
+                    op.type === 'create' || op.type === 'duplicate' ? 'text-green-600 dark:text-green-400' :
+                    op.type === 'delete' ? 'text-red-600 dark:text-red-400' :
+                    'text-blue-600 dark:text-blue-400'
+                  }`}>
+                    {op.type === 'duplicate' ? 'new' : op.type === 'create' ? 'new' : op.type}
+                  </span>
+                </div>
               ))}
+              {/* Modified files */}
+              {changedFiles.map((file) => {
+                const stats = diffStats.get(file.path);
+                const isExpanded = expandedFiles.has(file.path);
+                return (
+                  <div key={file.path}>
+                    <button
+                      type="button"
+                      className="flex w-full items-center gap-2 px-3 py-1.5 text-xs hover:bg-muted/50 transition-colors"
+                      onClick={() => toggleExpanded(file.path)}
+                    >
+                      <ChevronRight className={`h-3 w-3 shrink-0 text-muted-foreground transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
+                      <FileText className="h-3 w-3 shrink-0 text-muted-foreground" />
+                      <span className="truncate font-mono text-left">{file.path}</span>
+                      <span className="ml-auto shrink-0 flex items-center gap-1.5 text-xs font-medium">
+                        {stats && stats.additions > 0 && (
+                          <span className="text-green-600 dark:text-green-400">+{stats.additions}</span>
+                        )}
+                        {stats && stats.deletions > 0 && (
+                          <span className="text-red-600 dark:text-red-400">-{stats.deletions}</span>
+                        )}
+                        {stats && stats.additions === 0 && stats.deletions === 0 && (
+                          <span className="text-yellow-600 dark:text-yellow-400">modified</span>
+                        )}
+                      </span>
+                    </button>
+                    {isExpanded && (
+                      <div className="border-t bg-muted/30 px-1 py-1 overflow-x-auto">
+                        <PierreContentDiffView
+                          oldContent={file.original}
+                          newContent={file.current}
+                          fileName={file.path}
+                          viewMode="unified"
+                        />
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </div>
 
@@ -190,7 +236,9 @@ export function CommitDialog({
               <Button
                 variant="ghost"
                 size="sm"
-                className="h-6 gap-1 text-[10px] text-muted-foreground"
+                data-testid="commit-generate-ai"
+                aria-label="Generate commit message with AI"
+                className="h-6 gap-1 text-xs text-muted-foreground"
                 onClick={handleGenerateAI}
                 disabled={generating}
               >
@@ -204,6 +252,7 @@ export function CommitDialog({
             </div>
             <Input
               id="commit-message"
+              data-testid="commit-message-input"
               value={message}
               onChange={(e) => setMessage(e.target.value)}
               placeholder={generating ? 'Generating...' : 'Update documentation'}
@@ -216,6 +265,7 @@ export function CommitDialog({
             <Label htmlFor="commit-description">Description (optional)</Label>
             <Textarea
               id="commit-description"
+              data-testid="commit-description-input"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               placeholder={generating ? 'Generating...' : 'Add a longer description...'}
@@ -226,10 +276,12 @@ export function CommitDialog({
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
+          <Button variant="outline" data-testid="commit-cancel" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
           <Button
+            data-testid="commit-submit"
+            aria-label="Commit and push changes to GitHub"
             onClick={handleCommit}
             disabled={loading || !message.trim() || generating}
           >

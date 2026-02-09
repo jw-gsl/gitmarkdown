@@ -1,8 +1,9 @@
 'use client';
 
+import { useEffect, useCallback } from 'react';
 import { Check, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { computeLineDiff, type DiffLine } from '@/lib/utils/diff';
+import { PierreContentDiffView } from '@/components/diff/pierre-diff';
 import { cn } from '@/lib/utils';
 
 interface DiffViewProps {
@@ -15,52 +16,77 @@ interface DiffViewProps {
 }
 
 export function DiffView({ original, modified, onAccept, onReject, showActions = true, className }: DiffViewProps) {
-  const diffLines = computeLineDiff(original, modified);
+  const handleKeyDown = useCallback(
+    (e: KeyboardEvent) => {
+      if (!showActions) return;
+      if (e.metaKey || e.ctrlKey) {
+        if (e.key === 'y' || e.key === 'Y') {
+          e.preventDefault();
+          onAccept?.();
+        } else if (e.key === 'n' || e.key === 'N') {
+          e.preventDefault();
+          onReject?.();
+        }
+      }
+    },
+    [showActions, onAccept, onReject]
+  );
+
+  useEffect(() => {
+    if (!showActions) return;
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [showActions, handleKeyDown]);
+
+  const removedLines = original.split('\n').length;
+  const addedLines = modified.split('\n').length;
 
   return (
-    <div className={cn("rounded-lg border overflow-hidden", className)}>
-      <div className="max-h-96 overflow-auto">
-        <table className="w-full text-xs font-mono">
-          <tbody>
-            {diffLines.map((line, i) => (
-              <tr
-                key={i}
-                className={
-                  line.type === 'added'
-                    ? 'bg-green-50 dark:bg-green-950/30'
-                    : line.type === 'removed'
-                    ? 'bg-red-50 dark:bg-red-950/30'
-                    : ''
-                }
-              >
-                <td className="w-10 select-none px-2 text-right text-muted-foreground/50">
-                  {line.lineNumber.old || ''}
-                </td>
-                <td className="w-10 select-none px-2 text-right text-muted-foreground/50">
-                  {line.lineNumber.new || ''}
-                </td>
-                <td className="w-4 select-none text-center">
-                  {line.type === 'added' ? (
-                    <span className="text-green-600">+</span>
-                  ) : line.type === 'removed' ? (
-                    <span className="text-red-600">-</span>
-                  ) : null}
-                </td>
-                <td className="whitespace-pre-wrap px-2 py-0.5">{line.content}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+    <div
+      data-testid="diff-view"
+      className={cn('rounded-lg border overflow-hidden max-w-full', className)}
+      role="region"
+      aria-label="AI suggested edit"
+    >
+      {/* Diff stats summary */}
+      <div className="flex items-center gap-2 px-2 py-1 border-b bg-muted/30 text-xs text-muted-foreground">
+        <span className="font-mono flex items-center gap-1.5" aria-label={`${removedLines} lines removed, ${addedLines} lines added`}>
+          <span className="text-red-500 flex items-center gap-0.5"><X className="size-2.5" aria-hidden="true" />{removedLines}</span>
+          <span className="text-green-500 flex items-center gap-0.5"><Check className="size-2.5" aria-hidden="true" />{addedLines}</span>
+        </span>
+        <span className="opacity-60">lines changed</span>
+      </div>
+      <div className="max-h-96 overflow-auto overflow-x-auto">
+        <PierreContentDiffView
+          oldContent={original}
+          newContent={modified}
+          viewMode="unified"
+        />
       </div>
       {showActions && (
-        <div className="flex justify-end gap-2 border-t p-2">
-          <Button variant="outline" size="sm" className="h-7 text-xs" onClick={onReject}>
-            <X className="mr-1 h-3 w-3" />
-            Reject
+        <div className="flex justify-end gap-1 border-t px-2 py-1.5">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onReject}
+            data-testid="diff-reject"
+            className="h-6 text-[11px] px-2"
+            aria-label="Dismiss edit (Cmd+N)"
+          >
+            <X className="h-3 w-3 mr-1" />
+            Dismiss
+            <span className="-ml-0.5 font-normal opacity-60" aria-hidden="true">{'\u2318'}N</span>
           </Button>
-          <Button size="sm" className="h-7 text-xs" onClick={onAccept}>
-            <Check className="mr-1 h-3 w-3" />
-            Accept
+          <Button
+            size="sm"
+            onClick={onAccept}
+            data-testid="diff-accept"
+            className="h-6 text-[11px] px-2"
+            aria-label="Keep edit (Cmd+Y)"
+          >
+            <Check className="h-3 w-3 mr-1" />
+            Keep
+            <span className="-ml-0.5 font-normal opacity-60" aria-hidden="true">{'\u2318'}Y</span>
           </Button>
         </div>
       )}

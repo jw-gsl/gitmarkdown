@@ -14,3 +14,17 @@ export async function getRepo(octokit: Octokit, owner: string, repo: string): Pr
   const { data } = await octokit.repos.get({ owner, repo });
   return data as unknown as GitHubRepo;
 }
+
+export async function createRepo(
+  octokit: Octokit,
+  name: string,
+  options: { description?: string; isPrivate?: boolean; autoInit?: boolean }
+): Promise<GitHubRepo> {
+  const { data } = await octokit.repos.createForAuthenticatedUser({
+    name,
+    description: options.description || undefined,
+    private: options.isPrivate ?? true,
+    auto_init: options.autoInit ?? true,
+  });
+  return data as unknown as GitHubRepo;
+}

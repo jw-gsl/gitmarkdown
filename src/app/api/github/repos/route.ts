@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { adminAuth, adminDb } from '@/lib/firebase/admin';
 import { createOctokitClient } from '@/lib/github/client';
-import { listUserRepos, getRepo } from '@/lib/github/repos';
+import { listUserRepos, getRepo, createRepo } from '@/lib/github/repos';
 import { decrypt } from '@/app/api/auth/session/route';
 
 async function getOctokitFromRequest(request: NextRequest) {
@@ -35,6 +35,24 @@ export async function GET(request: NextRequest) {
     return NextResponse.json(repos);
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'Failed to fetch repos';
-    return NextResponse.json({ error: message }, { status: 500 });
+    const status = (error as { status?: number }).status ?? 500;
+    return NextResponse.json({ error: message }, { status: status >= 400 ? status : 500 });
+  }
+}
+
+export async function POST(request: NextRequest) {
+  try {
+    const octokit = await getOctokitFromRequest(request);
+    const { name, description, isPrivate, autoInit } = await request.json();
+    if (!name) {
+      return NextResponse.json({ error: 'Repository name is required' }, { status: 400 });
+    }
+    const repo = await createRepo(octokit, name, { description, isPrivate, autoInit });
+    return NextResponse.json(repo);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'Failed to create repository';
+    // Forward GitHub API status (e.g. 422 for validation errors like duplicate name)
+    const status = (error as { status?: number }).status ?? 500;
+    return NextResponse.json({ error: message }, { status: status >= 400 ? status : 500 });
   }
 }

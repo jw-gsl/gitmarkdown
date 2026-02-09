@@ -1,7 +1,8 @@
 'use client';
 
-import { useState, useMemo, useRef, useEffect } from 'react';
-import { GitPullRequest, Check, Search, ExternalLink, ArrowRight } from 'lucide-react';
+import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
+import { GitPullRequest, Check, Search, ExternalLink, ArrowRight, RefreshCw } from 'lucide-react';
+import { toast } from 'sonner';
 import {
   Popover,
   PopoverContent,
@@ -23,10 +24,11 @@ interface PRSelectorProps {
 export function PRSelector({ owner, repo, onBranchChange }: PRSelectorProps) {
   const { activePR } = useSyncStore();
   const { dirtyFiles } = useFileStore();
-  const { prs, loading, fetchOpenPRs } = useGitHubOpenPRs();
+  const { prs, loading, error, fetchOpenPRs } = useGitHubOpenPRs();
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
   const [pendingBranch, setPendingBranch] = useState<string | null>(null);
+  const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Fetch open PRs when popover opens
@@ -36,6 +38,7 @@ export function PRSelector({ owner, repo, onBranchChange }: PRSelectorProps) {
       setTimeout(() => inputRef.current?.focus(), 0);
     } else {
       setSearch('');
+      setSelectedIndex(0);
     }
   }, [open, owner, repo, fetchOpenPRs]);
 
@@ -45,11 +48,22 @@ export function PRSelector({ owner, repo, onBranchChange }: PRSelectorProps) {
     return prs.filter(
       (pr) =>
         pr.title.toLowerCase().includes(q) ||
-        String(pr.number).includes(q)
+        String(pr.number).includes(q) ||
+        pr.head.ref.toLowerCase().includes(q) ||
+        pr.base.ref.toLowerCase().includes(q)
     );
   }, [prs, search]);
 
-  const handleSelect = (pr: GitHubPullRequest) => {
+  // Reset selectedIndex when search or filtered results change
+  useEffect(() => {
+    setSelectedIndex(0);
+  }, [search]);
+
+  const handleSelect = useCallback((pr: GitHubPullRequest) => {
+    if (!pr.head.ref) {
+      toast.error('This PR branch has been deleted');
+      return;
+    }
     if (pr.number === activePR?.number) {
       setOpen(false);
       return;
@@ -61,7 +75,25 @@ export function PRSelector({ owner, repo, onBranchChange }: PRSelectorProps) {
     }
     onBranchChange(pr.head.ref);
     setOpen(false);
-  };
+  }, [activePR?.number, dirtyFiles.size, onBranchChange]);
+
+  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setSelectedIndex((prev) => Math.min(prev + 1, filteredPRs.length - 1));
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setSelectedIndex((prev) => Math.max(prev - 1, 0));
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (filteredPRs[selectedIndex]) {
+        handleSelect(filteredPRs[selectedIndex]);
+      }
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      setOpen(false);
+    }
+  }, [filteredPRs, selectedIndex, handleSelect]);
 
   const handleDiscardAndSwitch = () => {
     if (pendingBranch) {
@@ -79,7 +111,7 @@ export function PRSelector({ owner, repo, onBranchChange }: PRSelectorProps) {
           <Tooltip>
             <TooltipTrigger asChild>
               <PopoverTrigger asChild>
-                <button className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground hover:text-foreground hover:bg-accent transition-colors">
+                <button data-testid="pr-selector" aria-label={`Current pull request: #${activePR.number}. Click to switch PRs`} className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground hover:text-foreground hover:bg-accent transition-colors animate-in fade-in duration-300">
                   <GitPullRequest className="h-3.5 w-3.5" />
                   <span>#{activePR.number}</span>
                 </button>
@@ -96,11 +128,22 @@ export function PRSelector({ owner, repo, onBranchChange }: PRSelectorProps) {
             <Search className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
             <input
               ref={inputRef}
+              data-testid="pr-search"
+              aria-label="Search pull requests"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
+              onKeyDown={handleKeyDown}
               placeholder="Search pull requests..."
               className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
             />
+            <button
+              type="button"
+              aria-label="Refresh pull requests"
+              onClick={() => fetchOpenPRs(owner, repo, true)}
+              className="text-muted-foreground hover:text-foreground transition-colors"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+            </button>
           </div>
 
           {/* PR list */}
@@ -109,16 +152,22 @@ export function PRSelector({ owner, repo, onBranchChange }: PRSelectorProps) {
               <div className="px-3 py-4 text-center text-xs text-muted-foreground">
                 Loading...
               </div>
+            ) : error ? (
+              <div className="px-3 py-4 text-center text-xs text-destructive">
+                {error}
+              </div>
             ) : filteredPRs.length === 0 ? (
               <div className="px-3 py-4 text-center text-xs text-muted-foreground">
                 No open pull requests found
               </div>
             ) : (
-              filteredPRs.map((pr) => (
+              filteredPRs.map((pr, index) => (
                 <button
                   key={pr.number}
+                  data-testid={`pr-item-${pr.number}`}
+                  aria-label={`Switch to PR #${pr.number}: ${pr.title || 'Untitled PR'}`}
                   onClick={() => handleSelect(pr)}
-                  className="flex w-full items-start gap-2 px-3 py-2 text-left hover:bg-accent transition-colors"
+                  className={`flex w-full items-start gap-2 px-3 py-2 text-left hover:bg-accent transition-colors ${index === selectedIndex ? 'bg-accent' : ''}`}
                 >
                   <span className="w-4 shrink-0 pt-0.5">
                     {pr.number === activePR.number && <Check className="h-3.5 w-3.5 text-primary" />}
@@ -126,9 +175,9 @@ export function PRSelector({ owner, repo, onBranchChange }: PRSelectorProps) {
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-1.5">
                       <span className="font-mono text-xs text-muted-foreground shrink-0">#{pr.number}</span>
-                      <span className="text-sm truncate">{pr.title}</span>
+                      <span className="text-sm truncate">{pr.title || `Untitled PR #${pr.number}`}</span>
                     </div>
-                    <div className="flex items-center gap-1 mt-0.5 text-[11px] text-muted-foreground">
+                    <div className="flex items-center gap-1 mt-0.5 text-xs text-muted-foreground">
                       <span className="truncate max-w-[100px]">{pr.head.ref}</span>
                       <ArrowRight className="h-2.5 w-2.5 shrink-0" />
                       <span className="truncate max-w-[100px]">{pr.base.ref}</span>
@@ -145,6 +194,8 @@ export function PRSelector({ owner, repo, onBranchChange }: PRSelectorProps) {
               href={activePR.htmlUrl}
               target="_blank"
               rel="noopener noreferrer"
+              data-testid="pr-view-github"
+              aria-label="View pull request on GitHub"
               className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm hover:bg-accent transition-colors text-muted-foreground hover:text-foreground"
             >
               <ExternalLink className="h-3.5 w-3.5" />

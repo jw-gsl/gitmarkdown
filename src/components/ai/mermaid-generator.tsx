@@ -77,7 +77,7 @@ export function MermaidGenerator({ open, onOpenChange, onInsert, context }: Merm
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent data-testid="mermaid-generator-dialog" className="max-w-2xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Sparkles className="h-5 w-5 text-primary" />
@@ -92,7 +92,7 @@ export function MermaidGenerator({ open, onOpenChange, onInsert, context }: Merm
           <div>
             <Label>Diagram Type</Label>
             <Select value={diagramType} onValueChange={setDiagramType}>
-              <SelectTrigger className="mt-1.5">
+              <SelectTrigger data-testid="mermaid-type-select" aria-label="Select diagram type" className="mt-1.5">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -108,6 +108,8 @@ export function MermaidGenerator({ open, onOpenChange, onInsert, context }: Merm
           <div>
             <Label>Description</Label>
             <Textarea
+              data-testid="mermaid-description"
+              aria-label="Describe the diagram you want to generate"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               placeholder="Describe the diagram you want to generate..."
@@ -116,7 +118,7 @@ export function MermaidGenerator({ open, onOpenChange, onInsert, context }: Merm
             />
           </div>
 
-          <Button onClick={handleGenerate} disabled={isLoading || (!description.trim() && !context)}>
+          <Button data-testid="mermaid-generate" aria-label="Generate Mermaid diagram with AI" onClick={handleGenerate} disabled={isLoading || (!description.trim() && !context)}>
             {isLoading ? (
               <>
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -135,14 +137,14 @@ export function MermaidGenerator({ open, onOpenChange, onInsert, context }: Merm
               <div className="rounded border">
                 <div className="flex items-center justify-between border-b bg-muted/50 px-3 py-2">
                   <span className="text-xs font-medium">Mermaid Code</span>
-                  <Button variant="ghost" size="sm" className="h-6 text-xs" onClick={handleCopy}>
+                  <Button variant="ghost" size="sm" data-testid="mermaid-copy" aria-label="Copy Mermaid code to clipboard" className="h-6 text-xs" onClick={handleCopy}>
                     {copied ? <Check className="mr-1 h-3 w-3" /> : <Copy className="mr-1 h-3 w-3" />}
                     {copied ? 'Copied' : 'Copy'}
                   </Button>
                 </div>
                 <pre className="overflow-auto p-3 text-xs">{completion}</pre>
               </div>
-              <Button onClick={handleInsert} className="w-full">
+              <Button data-testid="mermaid-insert" aria-label="Insert generated diagram into editor" onClick={handleInsert} className="w-full">
                 Insert into Editor
               </Button>
             </div>

@@ -28,7 +28,7 @@ export function ResponsiveSidebar({
   if (isMobile) {
     return (
       <Sheet open={isOpen} onOpenChange={(open) => !open && onClose()}>
-        <SheetContent side={side} showCloseButton={false} className="p-0 w-[85vw] sm:max-w-sm">
+        <SheetContent side={side} showCloseButton={false} className="p-0 w-full sm:max-w-sm">
           <SheetTitle className="sr-only">{title}</SheetTitle>
           <SheetDescription className="sr-only">{title} panel</SheetDescription>
           {children}

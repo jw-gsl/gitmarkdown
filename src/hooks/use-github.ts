@@ -1,8 +1,43 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
+import { toast } from 'sonner';
 import { useAuth } from '@/providers/auth-provider';
+import { signInWithGitHub } from '@/lib/firebase/auth';
 import type { GitHubRepo, GitHubTreeItem, GitHubContent, GitHubCommit, GitHubBranch, GitHubPullRequest, GitHubReviewComment, ActivePR } from '@/types';
+
+// Cooldown so multiple failing API calls don't spam reconnect toasts
+let _lastAuthToast = 0;
+const AUTH_TOAST_COOLDOWN = 30_000; // 30 seconds
+
+function isGitHubAuthError(status: number, message: string): boolean {
+  if (status === 401) return true;
+  const lower = message.toLowerCase();
+  return (
+    lower.includes('bad credentials') ||
+    lower.includes('no github token') ||
+    lower.includes('resource not accessible')
+  );
+}
+
+function showReconnectToast() {
+  const now = Date.now();
+  if (now - _lastAuthToast < AUTH_TOAST_COOLDOWN) return;
+  _lastAuthToast = now;
+
+  toast.error('GitHub connection lost', {
+    description: 'Your GitHub token may have expired or been revoked.',
+    duration: 15_000,
+    action: {
+      label: 'Reconnect',
+      onClick: () => {
+        signInWithGitHub()
+          .then(() => toast.success('GitHub reconnected'))
+          .catch(() => toast.error('Reconnection failed. Try signing out and back in.'));
+      },
+    },
+  });
+}
 
 function useGitHubFetch() {
   const { user } = useAuth();
@@ -21,7 +56,11 @@ function useGitHubFetch() {
       });
       if (!res.ok) {
         const error = await res.json().catch(() => ({ error: 'Request failed' }));
-        throw new Error(error.error || 'Request failed');
+        const message = error.error || 'Request failed';
+        if (isGitHubAuthError(res.status, message)) {
+          showReconnectToast();
+        }
+        throw new Error(message);
       }
       return res.json();
     },
@@ -46,7 +85,19 @@ export function useGitHubRepos() {
     }
   }, [fetchWithAuth]);
 
-  return { repos, loading, fetchRepos };
+  const createRepo = useCallback(
+    async (name: string, options: { description?: string; isPrivate?: boolean; autoInit?: boolean }) => {
+      const data: GitHubRepo = await fetchWithAuth('/api/github/repos', {
+        method: 'POST',
+        body: JSON.stringify({ name, ...options }),
+      });
+      setRepos((prev) => [data, ...prev]);
+      return data;
+    },
+    [fetchWithAuth]
+  );
+
+  return { repos, loading, fetchRepos, createRepo };
 }
 
 export function useGitHubRepo() {
@@ -321,26 +372,80 @@ export function useGitHubCompare() {
   return { compareData, compareLoading: loading, fetchCompare };
 }
 
+// Module-level cache for open PRs with TTL
+const _openPRsCache = new Map<string, { data: GitHubPullRequest[]; timestamp: number }>();
+const PR_CACHE_TTL = 60_000; // 60 seconds
+
 export function useGitHubOpenPRs() {
   const [prs, setPrs] = useState<GitHubPullRequest[]>([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const fetchWithAuth = useGitHubFetch();
+  const abortRef = useRef<AbortController | null>(null);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      abortRef.current?.abort();
+    };
+  }, []);
 
   const fetchOpenPRs = useCallback(
-    async (owner: string, repo: string) => {
-      setLoading(true);
+    async (owner: string, repo: string, forceRefresh?: boolean) => {
+      // Check cache unless forced
+      const cacheKey = `${owner}/${repo}`;
+      if (!forceRefresh) {
+        const cached = _openPRsCache.get(cacheKey);
+        if (cached && Date.now() - cached.timestamp < PR_CACHE_TTL) {
+          if (mountedRef.current) {
+            setPrs(cached.data);
+            setError(null);
+          }
+          return cached.data;
+        }
+      }
+
+      // Abort any previous in-flight request
+      abortRef.current?.abort();
+      const controller = new AbortController();
+      abortRef.current = controller;
+
+      if (mountedRef.current) {
+        setLoading(true);
+        setError(null);
+      }
       try {
-        const data = await fetchWithAuth(`/api/github/pulls?owner=${owner}&repo=${repo}&state=open`);
-        setPrs(data);
+        const data: GitHubPullRequest[] = await fetchWithAuth(
+          `/api/github/pulls?owner=${owner}&repo=${repo}&state=open`
+        );
+        if (controller.signal.aborted) return prs;
+        // Sort by updated_at descending
+        data.sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
+        _openPRsCache.set(cacheKey, { data, timestamp: Date.now() });
+        if (mountedRef.current) {
+          setPrs(data);
+        }
         return data;
+      } catch (err: unknown) {
+        if (err instanceof DOMException && err.name === 'AbortError') return prs;
+        const message = err instanceof Error ? err.message : 'Failed to fetch pull requests';
+        if (mountedRef.current) {
+          setError(message);
+          setPrs([]);
+        }
+        return [];
       } finally {
-        setLoading(false);
+        if (mountedRef.current) {
+          setLoading(false);
+        }
       }
     },
-    [fetchWithAuth]
+    [fetchWithAuth, prs]
   );
 
-  return { prs, loading, fetchOpenPRs };
+  return { prs, loading, error, fetchOpenPRs };
 }
 
 export function useGitHubPulls() {

@@ -55,17 +55,19 @@ export function TableOfContents({ editor }: TableOfContentsProps) {
   if (headings.length === 0) return null;
 
   return (
-    <div className="w-56 shrink-0">
+    <div data-testid="table-of-contents" className="w-56 shrink-0">
       <div className="sticky top-4">
         <div className="mb-3 flex items-center gap-2 text-xs font-medium text-muted-foreground">
           <List className="h-3.5 w-3.5" />
           ON THIS PAGE
         </div>
         <ScrollArea className="max-h-[calc(100vh-200px)]">
-          <nav className="space-y-0.5">
+          <nav aria-label="Table of contents" className="space-y-0.5">
             {headings.map((heading) => (
               <button
                 key={heading.id}
+                aria-label={`Jump to heading: ${heading.text}`}
+                aria-current={activeId === heading.id ? 'location' : undefined}
                 onClick={() => handleClick(heading)}
                 className={`block w-full truncate rounded px-2 py-1 text-left text-xs transition-colors hover:bg-accent/50 ${
                   activeId === heading.id ? 'bg-accent text-accent-foreground font-medium' : 'text-muted-foreground'

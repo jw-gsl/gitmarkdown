@@ -1,8 +1,6 @@
 'use client';
 
 import { useEffect, useCallback } from 'react';
-import { X } from 'lucide-react';
-import { Button } from '@/components/ui/button';
 import { VersionHistory } from './version-history';
 import { useGitHubCommits } from '@/hooks/use-github';
 import { useUIStore } from '@/stores/ui-store';
@@ -53,13 +51,7 @@ export function VersionHistorySidebar({
   if (!isOpen) return null;
 
   return (
-    <div className="flex h-full w-80 flex-col border-l bg-background">
-      <div className="flex items-center justify-between border-b px-4 py-3">
-        <span className="font-semibold text-sm">Version History</span>
-        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onClose}>
-          <X className="h-3.5 w-3.5" />
-        </Button>
-      </div>
+    <aside data-testid="version-history-sidebar" aria-label="Version history" className="flex h-full w-full flex-col bg-background">
       {filePath && (
         <div className="border-b px-4 py-2">
           <p className="text-xs text-muted-foreground truncate">{filePath}</p>
@@ -76,6 +68,6 @@ export function VersionHistorySidebar({
           repo={repo}
         />
       </div>
-    </div>
+    </aside>
   );
 }
