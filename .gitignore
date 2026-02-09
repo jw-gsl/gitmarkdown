@@ -35,6 +35,10 @@ yarn-error.log*
 # env files
 .env
 .env.local
+.firebaserc
+firebase.json
+database.rules.json
+*firebase-adminsdk*.json
 .env.*.local
 
 # claude
