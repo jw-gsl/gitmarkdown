@@ -1,4 +1,4 @@
-import { useCurrentFrame, useVideoConfig, interpolate, spring, Sequence } from "remotion";
+import { useCurrentFrame, useVideoConfig, interpolate, spring } from "remotion";
 import { loadFont } from "@remotion/google-fonts/Inter";
 
 const { fontFamily } = loadFont("normal", {
@@ -10,18 +10,22 @@ export const SceneHero: React.FC = () => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
 
-  const logoScale = spring({ frame, fps, config: { damping: 12, stiffness: 150 } });
-  const logoRotate = interpolate(logoScale, [0, 1], [-15, 0]);
+  // Logo: visible from frame 0 at 85% scale, springs to 100%
+  const logoSpring = spring({ frame, fps, config: { damping: 12, stiffness: 150 } });
+  const logoScale = interpolate(logoSpring, [0, 1], [0.85, 1]);
+  const logoRotate = interpolate(logoSpring, [0, 1], [-4, 0]);
 
-  const titleProgress = spring({ frame, fps, delay: 15, config: { damping: 20 } });
-  const titleY = interpolate(titleProgress, [0, 1], [60, 0]);
-  const titleOpacity = interpolate(titleProgress, [0, 1], [0, 1]);
+  // Title: visible from frame 0 at 70% opacity, springs to 100%
+  const titleProgress = spring({ frame, fps, delay: 5, config: { damping: 20 } });
+  const titleY = interpolate(titleProgress, [0, 1], [12, 0]);
+  const titleOpacity = interpolate(titleProgress, [0, 1], [0.7, 1]);
 
-  const taglineOpacity = interpolate(frame, [40, 60], [0, 1], {
+  // Tagline: visible from frame 0 at 30% opacity, fades to 100%
+  const taglineOpacity = interpolate(frame, [0, 30], [0.3, 1], {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
   });
-  const taglineY = interpolate(frame, [40, 60], [20, 0], {
+  const taglineY = interpolate(frame, [0, 30], [6, 0], {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
   });
@@ -61,7 +65,7 @@ export const SceneHero: React.FC = () => {
           borderRadius: "50%",
           background: "radial-gradient(circle, rgba(34,211,238,0.1) 0%, transparent 70%)",
           filter: "blur(60px)",
-          transform: `scale(${0.8 + logoScale * 0.3})`,
+          transform: `scale(${0.9 + logoSpring * 0.2})`,
         }}
       />
 
@@ -109,21 +113,19 @@ export const SceneHero: React.FC = () => {
       </div>
 
       {/* Tagline */}
-      <Sequence from={0}>
-        <div
-          style={{
-            opacity: taglineOpacity,
-            transform: `translateY(${taglineY}px)`,
-            fontSize: 28,
-            color: "rgba(255,255,255,0.5)",
-            fontWeight: 400,
-            marginTop: 16,
-            letterSpacing: 1,
-          }}
-        >
-          Write. Collaborate. Ship.
-        </div>
-      </Sequence>
+      <div
+        style={{
+          opacity: taglineOpacity,
+          transform: `translateY(${taglineY}px)`,
+          fontSize: 28,
+          color: "rgba(255,255,255,0.5)",
+          fontWeight: 400,
+          marginTop: 16,
+          letterSpacing: 1,
+        }}
+      >
+        Write. Collaborate. Ship.
+      </div>
     </div>
   );
 };

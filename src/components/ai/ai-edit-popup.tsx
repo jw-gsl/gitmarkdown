@@ -27,7 +27,8 @@ export function AIEditPopup({
   onClose,
 }: AIEditPopupProps) {
   const [instruction, setInstruction] = useState('');
-  const { aiProvider, aiModel } = useSettingsStore();
+  const { aiProvider, aiModel, userAnthropicKey, userOpenAIKey } = useSettingsStore();
+  const userApiKey = aiProvider === 'anthropic' ? userAnthropicKey || undefined : userOpenAIKey || undefined;
 
   const { completion, complete, isLoading } = useCompletion({
     api: '/api/ai/edit',
@@ -36,6 +37,7 @@ export function AIEditPopup({
       context,
       provider: aiProvider,
       modelId: aiModel,
+      userApiKey,
     },
   });
 

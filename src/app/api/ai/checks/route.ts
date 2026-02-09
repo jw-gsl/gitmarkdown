@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { generateText } from 'ai';
-import { getAIModel, getDefaultModel } from '@/lib/ai/providers';
+import { getAIModel, getDefaultModel, hasApiKey } from '@/lib/ai/providers';
+import { checkRateLimit } from '@/lib/auth/rate-limit';
 import type { AIProvider } from '@/types';
 
 export const maxDuration = 60;
@@ -67,7 +68,7 @@ CRITICAL RULES:
 
 export async function POST(request: NextRequest) {
   try {
-    const { content, checks, customInstruction, provider, modelId, mode, filename } = await request.json();
+    const { content, checks, customInstruction, provider, modelId, mode, filename, userApiKey } = await request.json();
 
     if (!content || !checks || checks.length === 0) {
       return new Response(
@@ -79,18 +80,17 @@ export async function POST(request: NextRequest) {
     const resolvedProvider = (provider || getDefaultModel().provider) as AIProvider;
     const resolvedModel = modelId || getDefaultModel().modelId;
 
-    if (resolvedProvider === 'anthropic' && !process.env.ANTHROPIC_API_KEY) {
+    if (!hasApiKey(resolvedProvider, userApiKey)) {
       return new Response(
-        JSON.stringify({ error: 'Anthropic API key not configured. Add ANTHROPIC_API_KEY to .env.local' }),
+        JSON.stringify({ error: 'NO_API_KEY', message: `No ${resolvedProvider === 'anthropic' ? 'Anthropic' : 'OpenAI'} API key configured. Add your key in Settings → AI.` }),
         { status: 400, headers: { 'Content-Type': 'application/json' } }
       );
     }
-    if (resolvedProvider === 'openai' && !process.env.OPENAI_API_KEY) {
-      return new Response(
-        JSON.stringify({ error: 'OpenAI API key not configured. Add OPENAI_API_KEY to .env.local' }),
-        { status: 400, headers: { 'Content-Type': 'application/json' } }
-      );
-    }
+
+    // Rate limit: 15 requests/min (expensive operation)
+    const ip = request.headers.get('x-forwarded-for') || 'anonymous';
+    const rateLimitResponse = checkRateLimit(`ai-checks:${ip}`, { maxTokens: 15, refillRate: 15 / 60 });
+    if (rateLimitResponse) return rateLimitResponse;
 
     const isCodeMode = mode === 'code';
     const descriptions = isCodeMode ? CODE_CHECK_DESCRIPTIONS : CHECK_DESCRIPTIONS;
@@ -121,7 +121,7 @@ export async function POST(request: NextRequest) {
       : `Carefully analyze this text for the following writing issues. Find every instance:\n${checkDescriptions}\n\nText to analyze:\n"""\n${truncatedContent}\n"""${truncationNote}\n\nReturn ONLY a JSON array of issues (no other text):`;
 
     const result = await generateText({
-      model: getAIModel(resolvedProvider, resolvedModel),
+      model: getAIModel(resolvedProvider, resolvedModel, userApiKey),
       system: systemPrompt,
       messages: [
         {

@@ -237,6 +237,7 @@ export function CodeViewer({ content, filename, onChange, commentAnchors, active
             provider: settings.aiProvider,
             modelId: settings.aiModel,
             filename,
+            userApiKey: settings.aiProvider === 'anthropic' ? settings.userAnthropicKey || undefined : settings.userOpenAIKey || undefined,
           }),
           signal: controller.signal,
         });

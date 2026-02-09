@@ -13,6 +13,7 @@ import {
 import { DiffView } from '@/components/ai/diff-view';
 import { useSettingsStore } from '@/stores/settings-store';
 import { isMarkdownFile } from '@/lib/editor/markdown-serializer';
+import { toast } from 'sonner';
 
 interface InlineEditPanelProps {
   selectedText: string;
@@ -56,6 +57,8 @@ export function InlineEditPanel({
   const abortRef = useRef<AbortController | null>(null);
   const aiProvider = useSettingsStore((s) => s.aiProvider);
   const aiModel = useSettingsStore((s) => s.aiModel);
+  const userAnthropicKey = useSettingsStore((s) => s.userAnthropicKey);
+  const userOpenAIKey = useSettingsStore((s) => s.userOpenAIKey);
   const quickSuggestions = filename && !isMarkdownFile(filename) ? codeSuggestions : writingSuggestions;
 
   // Auto-focus input on mount
@@ -117,12 +120,22 @@ export function InlineEditPanel({
             context,
             provider: aiProvider,
             modelId: aiModel,
+            userApiKey: aiProvider === 'anthropic' ? userAnthropicKey || undefined : userOpenAIKey || undefined,
           }),
           signal: controller.signal,
         });
 
         if (!response.ok) {
-          throw new Error('AI edit request failed');
+          const errData = await response.json().catch(() => ({}));
+          if (errData.error === 'NO_API_KEY') {
+            toast.error('API key required', {
+              description: 'Add your API key in Settings → AI to use this feature.',
+            });
+            setMessages((prev) => prev.filter((msg) => msg.id !== assistantMessageId));
+            setIsStreaming(false);
+            return;
+          }
+          throw new Error(errData.error || 'AI edit request failed');
         }
 
         const reader = response.body?.getReader();
@@ -161,7 +174,7 @@ export function InlineEditPanel({
         setIsStreaming(false);
       }
     },
-    [selectedText, context, aiProvider, aiModel, isStreaming]
+    [selectedText, context, aiProvider, aiModel, isStreaming, userAnthropicKey, userOpenAIKey]
   );
 
   const handleSubmit = () => {

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useCallback, useEffect, useMemo } from 'react';
-import { Settings, Type, Bot, Timer, Monitor, Sun, Moon, Minus, Plus, Key, Webhook, Copy, Trash2, Loader2, Plug, FileText, Pencil, Github, RefreshCw, CheckCircle2, XCircle } from 'lucide-react';
+import { Settings, Type, Bot, Timer, Monitor, Sun, Moon, Minus, Plus, Key, Webhook, Copy, Trash2, Loader2, Plug, FileText, Pencil, Github, RefreshCw, CheckCircle2, XCircle, Eye, EyeOff, AlertTriangle, ChevronsUpDown } from 'lucide-react';
 import { useTheme } from 'next-themes';
 import { toast } from 'sonner';
 import {
@@ -26,6 +26,19 @@ import { Separator } from '@/components/ui/separator';
 import { Badge } from '@/components/ui/badge';
 import { Textarea } from '@/components/ui/textarea';
 import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/components/ui/popover';
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from '@/components/ui/command';
+import {
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -43,16 +56,22 @@ import { signInWithGitHub } from '@/lib/firebase/auth';
 import type { User } from 'firebase/auth';
 import type { AIProvider } from '@/types';
 
-const AI_MODELS: Record<AIProvider, { value: string; label: string }[]> = {
+const AI_MODELS: Record<AIProvider, { value: string; label: string; description?: string }[]> = {
   anthropic: [
-    { value: 'claude-sonnet-4-20250514', label: 'Claude Sonnet 4' },
-    { value: 'claude-opus-4-20250514', label: 'Claude Opus 4' },
-    { value: 'claude-3-5-haiku-20241022', label: 'Claude 3.5 Haiku' },
+    { value: 'claude-opus-4-6', label: 'Claude Opus 4.6', description: 'Most capable, extended thinking' },
+    { value: 'claude-sonnet-4-5-20250929', label: 'Claude Sonnet 4.5', description: 'Best balance of speed and intelligence' },
+    { value: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5', description: 'Fast and affordable' },
+    { value: 'claude-sonnet-4-20250514', label: 'Claude Sonnet 4', description: 'Previous generation' },
   ],
   openai: [
-    { value: 'gpt-4o', label: 'GPT-4o' },
-    { value: 'gpt-4o-mini', label: 'GPT-4o Mini' },
-    { value: 'o1', label: 'o1' },
+    { value: 'gpt-4.1', label: 'GPT-4.1', description: 'Smartest non-reasoning, 1M context' },
+    { value: 'gpt-4.1-mini', label: 'GPT-4.1 Mini', description: 'Fast and affordable' },
+    { value: 'gpt-4.1-nano', label: 'GPT-4.1 Nano', description: 'Most cost-efficient' },
+    { value: 'o3', label: 'o3', description: 'Advanced reasoning' },
+    { value: 'o4-mini', label: 'o4-mini', description: 'Fast reasoning, strong at coding' },
+    { value: 'o3-mini', label: 'o3-mini', description: 'Efficient reasoning' },
+    { value: 'gpt-4o', label: 'GPT-4o', description: 'Previous gen multimodal' },
+    { value: 'gpt-4o-mini', label: 'GPT-4o Mini', description: 'Previous gen fast' },
   ],
 };
 
@@ -477,6 +496,131 @@ function EditorSettings() {
   );
 }
 
+function APIKeyInput({
+  label,
+  value,
+  onChange,
+  placeholder,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  placeholder: string;
+}) {
+  const [visible, setVisible] = useState(false);
+
+  return (
+    <div className="space-y-1.5">
+      <Label>{label}</Label>
+      <div className="flex items-center gap-2">
+        <div className="relative flex-1">
+          <Input
+            type={visible ? 'text' : 'password'}
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder={placeholder}
+            className="pr-9 font-mono text-xs"
+            autoComplete="off"
+          />
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            className="absolute right-1.5 top-1/2 -translate-y-1/2"
+            onClick={() => setVisible(!visible)}
+          >
+            {visible ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+          </Button>
+        </div>
+        {value && (
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            onClick={() => onChange('')}
+            aria-label={`Clear ${label}`}
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ModelPicker({
+  models,
+  value,
+  onChange,
+}: {
+  models: { value: string; label: string; description?: string }[];
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const selectedModel = models.find((m) => m.value === value);
+
+  return (
+    <div className="space-y-2">
+      <Label>Default AI model</Label>
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <Button
+            variant="outline"
+            role="combobox"
+            aria-expanded={open}
+            className="w-full justify-between font-normal"
+          >
+            <span className="truncate">
+              {selectedModel?.label || 'Select model...'}
+            </span>
+            <ChevronsUpDown className="ml-2 h-3.5 w-3.5 shrink-0 opacity-50" />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
+          <Command>
+            <CommandInput placeholder="Search models..." />
+            <CommandList>
+              <CommandEmpty>No model found.</CommandEmpty>
+              <CommandGroup>
+                {models.map((model) => (
+                  <CommandItem
+                    key={model.value}
+                    value={`${model.label} ${model.description || ''}`}
+                    onSelect={() => {
+                      onChange(model.value);
+                      setOpen(false);
+                    }}
+                  >
+                    <div className="flex flex-col">
+                      <span className={cn(
+                        'text-sm',
+                        model.value === value && 'font-medium'
+                      )}>
+                        {model.label}
+                      </span>
+                      {model.description && (
+                        <span className="text-[11px] text-muted-foreground">
+                          {model.description}
+                        </span>
+                      )}
+                    </div>
+                    {model.value === value && (
+                      <CheckCircle2 className="ml-auto h-3.5 w-3.5 text-primary shrink-0" />
+                    )}
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            </CommandList>
+          </Command>
+        </PopoverContent>
+      </Popover>
+      <p className="text-xs text-muted-foreground">
+        Search or select the default model for the selected provider
+      </p>
+    </div>
+  );
+}
+
 function AISettings() {
   const aiProvider = useSettingsStore((s) => s.aiProvider);
   const setAIProvider = useSettingsStore((s) => s.setAIProvider);
@@ -484,6 +628,10 @@ function AISettings() {
   const setAIModel = useSettingsStore((s) => s.setAIModel);
   const tabCompletionsEnabled = useSettingsStore((s) => s.tabCompletionsEnabled);
   const setTabCompletionsEnabled = useSettingsStore((s) => s.setTabCompletionsEnabled);
+  const userAnthropicKey = useSettingsStore((s) => s.userAnthropicKey);
+  const setUserAnthropicKey = useSettingsStore((s) => s.setUserAnthropicKey);
+  const userOpenAIKey = useSettingsStore((s) => s.userOpenAIKey);
+  const setUserOpenAIKey = useSettingsStore((s) => s.setUserOpenAIKey);
 
   const availableModels = AI_MODELS[aiProvider] || [];
 
@@ -498,6 +646,37 @@ function AISettings() {
 
   return (
     <div className="space-y-6">
+      {/* API Keys */}
+      <div>
+        <h3 className="text-sm font-medium mb-1">Your API Keys</h3>
+        <p className="text-xs text-muted-foreground mb-3">
+          Add your own API keys to use AI features. Keys are stored locally in your browser only.
+        </p>
+        <div className="space-y-3">
+          <APIKeyInput
+            label="Anthropic API Key"
+            value={userAnthropicKey}
+            onChange={setUserAnthropicKey}
+            placeholder="sk-ant-..."
+          />
+          <APIKeyInput
+            label="OpenAI API Key"
+            value={userOpenAIKey}
+            onChange={setUserOpenAIKey}
+            placeholder="sk-..."
+          />
+        </div>
+        <div className="flex items-start gap-2 mt-3 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2">
+          <AlertTriangle className="h-3.5 w-3.5 text-amber-500 shrink-0 mt-0.5" />
+          <p className="text-[11px] text-muted-foreground">
+            Keys are stored in your browser&apos;s local storage and sent directly to the AI provider.
+            They are never saved on our servers.
+          </p>
+        </div>
+      </div>
+
+      <Separator />
+
       {/* AI Provider */}
       <div className="space-y-2">
         <Label>Default AI provider</Label>
@@ -518,24 +697,11 @@ function AISettings() {
       <Separator />
 
       {/* AI Model */}
-      <div className="space-y-2">
-        <Label>Default AI model</Label>
-        <Select value={aiModel} onValueChange={setAIModel}>
-          <SelectTrigger className="w-full">
-            <SelectValue placeholder="Select model" />
-          </SelectTrigger>
-          <SelectContent>
-            {availableModels.map((model) => (
-              <SelectItem key={model.value} value={model.value}>
-                {model.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <p className="text-xs text-muted-foreground">
-          Choose the default model for the selected provider
-        </p>
-      </div>
+      <ModelPicker
+        models={availableModels}
+        value={aiModel}
+        onChange={setAIModel}
+      />
 
       <Separator />
 

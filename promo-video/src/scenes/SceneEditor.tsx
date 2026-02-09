@@ -11,8 +11,8 @@ Welcome to **GitMarkdown** — the collaborative
 markdown editor that syncs with GitHub.
 
 ## Features
-- Real-time editing with rich formatting
-- GitHub sync on every save`;
+- Rich formatting with slash commands
+- Real-time collaboration & GitHub sync`;
 
 export const SceneEditor: React.FC = () => {
   const frame = useCurrentFrame();
@@ -28,8 +28,12 @@ export const SceneEditor: React.FC = () => {
   // Cursor blink
   const cursorVisible = Math.floor(frame / 8) % 2 === 0 || frame < 80;
 
+  // Slash command popup
+  const slashDelay = 70;
+  const slashPop = spring({ frame, fps, delay: slashDelay, config: { damping: 12 } });
+
   // Zoom effect
-  const zoom = interpolate(frame, [60, 90], [1, 1.15], {
+  const zoom = interpolate(frame, [60, 90], [1, 1.08], {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
   });
@@ -114,7 +118,7 @@ export const SceneEditor: React.FC = () => {
             borderBottom: "1px solid rgba(255,255,255,0.06)",
           }}
         >
-          {["B", "I", "U", "H1", "</>", "Link", "List"].map((btn) => (
+          {["B", "I", "U", "H1", "H2", "</>", "Link", "List", "Table", "Task"].map((btn) => (
             <div
               key={btn}
               style={{
@@ -164,6 +168,69 @@ export const SceneEditor: React.FC = () => {
               />
             )}
           </pre>
+
+          {/* Slash command popup */}
+          {frame >= slashDelay && (
+            <div
+              style={{
+                position: "absolute",
+                left: 36,
+                bottom: 30,
+                transform: `scale(${slashPop})`,
+                opacity: slashPop,
+                background: "#1e1e2e",
+                borderRadius: 10,
+                border: "1px solid rgba(255,255,255,0.1)",
+                boxShadow: "0 10px 40px rgba(0,0,0,0.5)",
+                padding: "6px",
+                width: 220,
+              }}
+            >
+              {[
+                { icon: "H", label: "Heading", desc: "Section title" },
+                { icon: "/", label: "Code Block", desc: "Fenced code" },
+                { icon: "\u2610", label: "Task List", desc: "Checkboxes" },
+                { icon: "\u25A6", label: "Table", desc: "Data table" },
+              ].map((item, i) => {
+                const itemPop = spring({ frame, fps, delay: slashDelay + 3 + i * 3, config: { damping: 14 } });
+                return (
+                  <div
+                    key={item.label}
+                    style={{
+                      opacity: itemPop,
+                      padding: "8px 10px",
+                      borderRadius: 6,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 10,
+                      background: i === 0 ? "rgba(34,211,238,0.08)" : "transparent",
+                    }}
+                  >
+                    <div
+                      style={{
+                        width: 28,
+                        height: 28,
+                        borderRadius: 6,
+                        background: "rgba(255,255,255,0.06)",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        fontSize: 13,
+                        fontWeight: 700,
+                        color: i === 0 ? "#22D3EE" : "rgba(255,255,255,0.5)",
+                      }}
+                    >
+                      {item.icon}
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: "#e2e8f0" }}>{item.label}</div>
+                      <div style={{ fontSize: 10, color: "rgba(255,255,255,0.3)" }}>{item.desc}</div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       </div>
     </div>

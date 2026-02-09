@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { streamText, stepCountIs, convertToModelMessages } from 'ai';
-import { getAIModel, getDefaultModel } from '@/lib/ai/providers';
+import { getAIModel, getDefaultModel, hasApiKey } from '@/lib/ai/providers';
+import { checkRateLimit } from '@/lib/auth/rate-limit';
 import { createAllTools, aiTools } from '@/lib/ai/tools';
 import { authenticateRequest } from '@/lib/auth/api-auth';
 import type { AIProvider } from '@/types';
@@ -41,22 +42,16 @@ export async function POST(request: NextRequest) {
   try {
     const {
       messages, provider, modelId, fileContext, personaInstructions, personaName,
-      owner, repo, branch, fileTree,
+      owner, repo, branch, fileTree, userApiKey,
     } = await request.json();
 
     const resolvedProvider = (provider || getDefaultModel().provider) as AIProvider;
     const resolvedModel = modelId || getDefaultModel().modelId;
 
-    // Validate API key
-    if (resolvedProvider === 'anthropic' && !process.env.ANTHROPIC_API_KEY) {
+    // Validate API key availability
+    if (!hasApiKey(resolvedProvider, userApiKey)) {
       return new Response(
-        JSON.stringify({ error: 'Anthropic API key not configured. Add ANTHROPIC_API_KEY to .env.local' }),
-        { status: 400, headers: { 'Content-Type': 'application/json' } }
-      );
-    }
-    if (resolvedProvider === 'openai' && !process.env.OPENAI_API_KEY) {
-      return new Response(
-        JSON.stringify({ error: 'OpenAI API key not configured. Add OPENAI_API_KEY to .env.local' }),
+        JSON.stringify({ error: 'NO_API_KEY', message: `No ${resolvedProvider === 'anthropic' ? 'Anthropic' : 'OpenAI'} API key configured. Add your key in Settings → AI.` }),
         { status: 400, headers: { 'Content-Type': 'application/json' } }
       );
     }
@@ -69,6 +64,11 @@ export async function POST(request: NextRequest) {
       console.warn('[AI Chat] Auth failed:', authErr?.message ?? authErr);
     }
     const githubToken = auth?.githubToken ?? '';
+
+    // Rate limit: 20 requests/min per user, burst of 20
+    const rateLimitId = auth?.userId || request.headers.get('x-forwarded-for') || 'anonymous';
+    const rateLimitResponse = checkRateLimit(`ai-chat:${rateLimitId}`, { maxTokens: 20, refillRate: 20 / 60 });
+    if (rateLimitResponse) return rateLimitResponse;
 
     console.log('[AI Chat] Request:', {
       provider: resolvedProvider,
@@ -179,7 +179,7 @@ Keep progress updates under 10 words each.
     const modelMessages = await convertToModelMessages(messages, { tools: aiTools });
 
     const result = streamText({
-      model: getAIModel(resolvedProvider, resolvedModel),
+      model: getAIModel(resolvedProvider, resolvedModel, userApiKey),
       system: systemMessage,
       messages: modelMessages,
       tools,

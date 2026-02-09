@@ -11,11 +11,11 @@ export const SceneCTA: React.FC = () => {
   const logoScale = spring({ frame, fps, config: { damping: 10, stiffness: 150 } });
 
   // CTA text
-  const ctaProgress = spring({ frame, fps, delay: 12, config: { damping: 15 } });
+  const ctaProgress = spring({ frame, fps, delay: 10, config: { damping: 15 } });
   const ctaY = interpolate(ctaProgress, [0, 1], [40, 0]);
 
   // URL fade in
-  const urlOpacity = interpolate(frame, [25, 40], [0, 1], {
+  const urlOpacity = interpolate(frame, [20, 35], [0, 1], {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
   });
@@ -26,8 +26,15 @@ export const SceneCTA: React.FC = () => {
     extrapolateRight: "clamp",
   });
 
-  // Background gradient shift
-  const bgAngle = interpolate(frame, [0, 75], [130, 160]);
+  // Feature summary chips
+  const chips = [
+    "Rich Editor",
+    "GitHub Sync",
+    "Real-Time Collab",
+    "AI Powered",
+    "Writing Checks",
+    "PR Creation",
+  ];
 
   return (
     <div
@@ -48,18 +55,18 @@ export const SceneCTA: React.FC = () => {
       <div
         style={{
           position: "absolute",
-          width: 400,
-          height: 400,
+          width: 500,
+          height: 500,
           borderRadius: "50%",
           background: "radial-gradient(circle, rgba(34,211,238,0.1) 0%, transparent 70%)",
           filter: "blur(50px)",
-          top: "30%",
-          left: "35%",
+          top: "25%",
+          left: "32%",
         }}
       />
 
       {/* Logo */}
-      <div style={{ transform: `scale(${logoScale})`, marginBottom: 24 }}>
+      <div style={{ transform: `scale(${logoScale})`, marginBottom: 20 }}>
         <svg width="80" height="80" viewBox="0 0 24 24" fill="none">
           <rect width="24" height="24" rx="6" fill="#18181b" stroke="#27272a" strokeWidth="1" />
           <path d="M7 8h10M7 12h6M7 16h8" stroke="white" strokeWidth="2" strokeLinecap="round" />
@@ -75,14 +82,7 @@ export const SceneCTA: React.FC = () => {
         }}
       >
         <span style={{ fontSize: 72, fontWeight: 900, color: "white", letterSpacing: -2 }}>Git</span>
-        <span
-          style={{
-            fontSize: 72,
-            fontWeight: 900,
-            color: "#22D3EE",
-            letterSpacing: -2,
-          }}
-        >
+        <span style={{ fontSize: 72, fontWeight: 900, color: "#22D3EE", letterSpacing: -2 }}>
           Markdown
         </span>
       </div>
@@ -91,14 +91,45 @@ export const SceneCTA: React.FC = () => {
       <div
         style={{
           opacity: urlOpacity,
-          fontSize: 24,
-          color: "rgba(255,255,255,0.7)",
+          fontSize: 22,
+          color: "rgba(255,255,255,0.6)",
           fontWeight: 400,
-          marginTop: 12,
-          marginBottom: 32,
+          marginTop: 10,
+          marginBottom: 20,
         }}
       >
         The collaborative markdown editor for GitHub
+      </div>
+
+      {/* Feature summary chips */}
+      <div
+        style={{
+          display: "flex",
+          gap: 8,
+          marginBottom: 28,
+          opacity: urlOpacity,
+        }}
+      >
+        {chips.map((chip, i) => {
+          const s = spring({ frame, fps, delay: 25 + i * 3, config: { damping: 15 } });
+          return (
+            <div
+              key={chip}
+              style={{
+                opacity: s,
+                padding: "4px 12px",
+                borderRadius: 20,
+                background: "rgba(255,255,255,0.05)",
+                border: "1px solid rgba(255,255,255,0.08)",
+                color: "rgba(255,255,255,0.5)",
+                fontSize: 12,
+                fontWeight: 600,
+              }}
+            >
+              {chip}
+            </div>
+          );
+        })}
       </div>
 
       {/* CTA button */}
@@ -107,7 +138,7 @@ export const SceneCTA: React.FC = () => {
           opacity: urlOpacity,
           transform: `scale(${pulse})`,
           background: "#22D3EE",
-          padding: "16px 48px",
+          padding: "14px 44px",
           borderRadius: 12,
           fontSize: 20,
           fontWeight: 700,

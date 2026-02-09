@@ -79,6 +79,8 @@ interface SettingsStoreState {
   activePersonaId: string;
   tabCompletionsEnabled: boolean;
   customSnippets: CustomSnippet[];
+  userAnthropicKey: string;
+  userOpenAIKey: string;
 
   setTheme: (theme: SettingsStoreState['theme']) => void;
   setAIProvider: (provider: AIProvider) => void;
@@ -100,6 +102,8 @@ interface SettingsStoreState {
   setCommitValidationLevel: (level: CommitValidationLevel) => void;
   setActivePersonaId: (id: string) => void;
   setTabCompletionsEnabled: (enabled: boolean) => void;
+  setUserAnthropicKey: (key: string) => void;
+  setUserOpenAIKey: (key: string) => void;
   addSnippet: (snippet: CustomSnippet) => void;
   updateSnippet: (id: string, updates: Partial<Omit<CustomSnippet, 'id'>>) => void;
   removeSnippet: (id: string) => void;
@@ -110,7 +114,7 @@ export const useSettingsStore = create<SettingsStoreState>()(
     (set) => ({
       theme: 'system',
       aiProvider: (process.env.NEXT_PUBLIC_DEFAULT_AI_PROVIDER as AIProvider) || 'anthropic',
-      aiModel: process.env.NEXT_PUBLIC_DEFAULT_AI_MODEL || 'claude-sonnet-4-20250514',
+      aiModel: process.env.NEXT_PUBLIC_DEFAULT_AI_MODEL || 'claude-sonnet-4-5-20250929',
       editorFontSize: 16,
       editorLineHeight: 1.6,
       showLineNumbers: false,
@@ -129,6 +133,8 @@ export const useSettingsStore = create<SettingsStoreState>()(
       activePersonaId: 'default',
       tabCompletionsEnabled: true,
       customSnippets: [],
+      userAnthropicKey: '',
+      userOpenAIKey: '',
 
       setTheme: (theme) => set({ theme }),
       setAIProvider: (provider) => set({ aiProvider: provider }),
@@ -150,6 +156,8 @@ export const useSettingsStore = create<SettingsStoreState>()(
       setCommitValidationLevel: (level) => set({ commitValidationLevel: level }),
       setActivePersonaId: (id) => set({ activePersonaId: id }),
       setTabCompletionsEnabled: (enabled) => set({ tabCompletionsEnabled: enabled }),
+      setUserAnthropicKey: (key) => set({ userAnthropicKey: key }),
+      setUserOpenAIKey: (key) => set({ userOpenAIKey: key }),
       addSnippet: (snippet) =>
         set((s) => ({ customSnippets: [...s.customSnippets, snippet] })),
       updateSnippet: (id, updates) =>

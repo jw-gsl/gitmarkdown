@@ -74,6 +74,7 @@ export const GhostText = Extension.create({
             provider: settings.aiProvider,
             modelId: settings.aiModel,
             filename: currentFile?.path,
+            userApiKey: settings.aiProvider === 'anthropic' ? settings.userAnthropicKey || undefined : settings.userOpenAIKey || undefined,
           }),
           signal: abortController.signal,
         });

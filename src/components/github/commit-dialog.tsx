@@ -101,6 +101,10 @@ export function CommitDialog({
           changedFiles: changedFiles.map((f) => f.path),
           provider: useSettingsStore.getState().aiProvider,
           modelId: useSettingsStore.getState().aiModel,
+          userApiKey: (() => {
+            const s = useSettingsStore.getState();
+            return s.aiProvider === 'anthropic' ? s.userAnthropicKey || undefined : s.userOpenAIKey || undefined;
+          })(),
         }),
       });
 

@@ -62,6 +62,8 @@ interface WritingChecksProps {
 export function WritingChecks({ isOpen, onClose, content, onApplyFix, mode = 'writing', filename }: WritingChecksProps) {
   const aiProvider = useSettingsStore((s) => s.aiProvider);
   const aiModel = useSettingsStore((s) => s.aiModel);
+  const userAnthropicKey = useSettingsStore((s) => s.userAnthropicKey);
+  const userOpenAIKey = useSettingsStore((s) => s.userOpenAIKey);
   const setActiveCheck = useUIStore((s) => s.setActiveCheck);
   const checkActionResult = useUIStore((s) => s.checkActionResult);
   const setCheckActionResult = useUIStore((s) => s.setCheckActionResult);
@@ -143,11 +145,19 @@ export function WritingChecks({ isOpen, onClose, content, onApplyFix, mode = 'wr
           modelId: aiModel,
           mode,
           filename,
+          userApiKey: aiProvider === 'anthropic' ? userAnthropicKey || undefined : userOpenAIKey || undefined,
         }),
       });
 
       if (!res.ok) {
         const data = await res.json();
+        if (data.error === 'NO_API_KEY') {
+          toast.error('API key required', {
+            description: 'Add your API key in Settings → AI to use this feature.',
+          });
+          setLoading(false);
+          return;
+        }
         throw new Error(data.error || 'Check failed');
       }
 
@@ -173,7 +183,7 @@ export function WritingChecks({ isOpen, onClose, content, onApplyFix, mode = 'wr
     } finally {
       setLoading(false);
     }
-  }, [selectedChecks, customEnabled, customInstruction, content, aiProvider, aiModel, mode, filename, isCode]);
+  }, [selectedChecks, customEnabled, customInstruction, content, aiProvider, aiModel, mode, filename, isCode, userAnthropicKey, userOpenAIKey]);
 
   const handleRerun = useCallback(() => {
     setHasRun(false);

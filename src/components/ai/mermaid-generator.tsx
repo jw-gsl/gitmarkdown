@@ -43,7 +43,8 @@ export function MermaidGenerator({ open, onOpenChange, onInsert, context }: Merm
   const [diagramType, setDiagramType] = useState('flowchart');
   const [description, setDescription] = useState('');
   const [copied, setCopied] = useState(false);
-  const { aiProvider, aiModel } = useSettingsStore();
+  const { aiProvider, aiModel, userAnthropicKey, userOpenAIKey } = useSettingsStore();
+  const userApiKey = aiProvider === 'anthropic' ? userAnthropicKey || undefined : userOpenAIKey || undefined;
 
   const { completion, complete, isLoading } = useCompletion({
     api: '/api/ai/mermaid',
@@ -51,6 +52,7 @@ export function MermaidGenerator({ open, onOpenChange, onInsert, context }: Merm
       diagramType,
       provider: aiProvider,
       modelId: aiModel,
+      userApiKey,
     },
   });
 

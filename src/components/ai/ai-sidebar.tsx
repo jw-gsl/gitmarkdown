@@ -50,6 +50,7 @@ import {
 } from '@/lib/firebase/firestore';
 import type { FileNode } from '@/types';
 import { toast } from 'sonner';
+import { useAIKey, handleAIKeyError } from '@/hooks/use-ai-key';
 
 /** Mentioned file with fetched content */
 interface MentionedFile {
@@ -128,6 +129,7 @@ export function AISidebar({ isOpen, onClose }: AISidebarProps) {
   const repo = params.repo as string;
   const { user } = useAuth();
   const { aiProvider, aiModel } = useSettingsStore();
+  const { getUserApiKey } = useAIKey();
   const activePersona = useActivePersona();
   const { currentFile, files, addPendingOp, applyOpToTree } = useFileStore();
   const { currentBranch, baseBranch } = useSyncStore();
@@ -265,6 +267,7 @@ export function AISidebar({ isOpen, onClose }: AISidebarProps) {
     repo,
     branch: currentBranch,
     fileTree: fileTreeString,
+    userApiKey: getUserApiKey(),
   });
   transportBodyRef.current = {
     provider: aiProvider,
@@ -276,6 +279,7 @@ export function AISidebar({ isOpen, onClose }: AISidebarProps) {
     repo,
     branch: currentBranch,
     fileTree: fileTreeString,
+    userApiKey: getUserApiKey(),
   };
 
   // Keep a ref to the user for async header resolution
@@ -300,6 +304,7 @@ export function AISidebar({ isOpen, onClose }: AISidebarProps) {
     onError: (err) => {
       try {
         const parsed = JSON.parse(err.message);
+        if (handleAIKeyError(parsed)) return;
         setErrorMessage(parsed.error || err.message);
       } catch {
         setErrorMessage(err.message);
@@ -435,7 +440,7 @@ export function AISidebar({ isOpen, onClose }: AISidebarProps) {
                 const res = await fetch('/api/ai/title', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ message: text }),
+                  body: JSON.stringify({ message: text, userApiKey: transportBodyRef.current.userApiKey, provider: transportBodyRef.current.provider }),
                 });
                 const { title } = await res.json();
                 if (title && title !== 'New Chat') {

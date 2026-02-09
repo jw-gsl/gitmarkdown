@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { streamText } from 'ai';
-import { getAIModel, getDefaultModel } from '@/lib/ai/providers';
+import { getAIModel, getDefaultModel, hasApiKey } from '@/lib/ai/providers';
+import { checkRateLimit } from '@/lib/auth/rate-limit';
 import type { AIProvider } from '@/types';
 
 export const maxDuration = 30;
@@ -82,24 +83,22 @@ function detectContext(before: string, after: string) {
 
 export async function POST(request: NextRequest) {
   try {
-    const { before, after, provider, modelId, filename } = await request.json();
+    const { before, after, provider, modelId, filename, userApiKey } = await request.json();
 
     const resolvedProvider = (provider || getDefaultModel().provider) as AIProvider;
     const resolvedModel = modelId || getDefaultModel().modelId;
 
-    // Validate API key exists for the selected provider
-    if (resolvedProvider === 'anthropic' && !process.env.ANTHROPIC_API_KEY) {
+    if (!hasApiKey(resolvedProvider, userApiKey)) {
       return new Response(
-        JSON.stringify({ error: 'Anthropic API key not configured. Add ANTHROPIC_API_KEY to .env.local' }),
+        JSON.stringify({ error: 'NO_API_KEY', message: `No ${resolvedProvider === 'anthropic' ? 'Anthropic' : 'OpenAI'} API key configured. Add your key in Settings → AI.` }),
         { status: 400, headers: { 'Content-Type': 'application/json' } }
       );
     }
-    if (resolvedProvider === 'openai' && !process.env.OPENAI_API_KEY) {
-      return new Response(
-        JSON.stringify({ error: 'OpenAI API key not configured. Add OPENAI_API_KEY to .env.local' }),
-        { status: 400, headers: { 'Content-Type': 'application/json' } }
-      );
-    }
+
+    // Rate limit: 60 requests/min for completions (high frequency)
+    const ip = request.headers.get('x-forwarded-for') || 'anonymous';
+    const rateLimitResponse = checkRateLimit(`ai-complete:${ip}`, { maxTokens: 60, refillRate: 1 });
+    if (rateLimitResponse) return rateLimitResponse;
 
     const language = detectLanguage(filename);
     const isCode = isCodeFile(filename);
@@ -200,7 +199,7 @@ RULES:
       : '';
 
     const result = streamText({
-      model: getAIModel(resolvedProvider, resolvedModel),
+      model: getAIModel(resolvedProvider, resolvedModel, userApiKey),
       system: systemPrompt,
       messages: [
         {

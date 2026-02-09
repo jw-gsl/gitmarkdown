@@ -23,6 +23,7 @@ import {
 import { useSyncStore } from '@/stores/sync-store';
 import { useGitHubCompare, type CompareFile } from '@/hooks/use-github';
 import { useAuth } from '@/providers/auth-provider';
+import { useSettingsStore } from '@/stores/settings-store';
 import { PierrePatchDiffView } from '@/components/diff/pierre-diff';
 
 interface PRDialogProps {
@@ -74,6 +75,7 @@ function FileDiffItem({ file }: { file: CompareFile }) {
 export function PRDialog({ open, onOpenChange, onCreatePR, owner, repo }: PRDialogProps) {
   const { currentBranch, branches } = useSyncStore();
   const { user } = useAuth();
+  const { aiProvider, userAnthropicKey, userOpenAIKey } = useSettingsStore();
   const { compareData, compareLoading, fetchCompare } = useGitHubCompare();
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
@@ -104,6 +106,8 @@ export function PRDialog({ open, onOpenChange, onCreatePR, owner, repo }: PRDial
             files: compareData.files,
             commits: compareData.commits,
             field,
+            userApiKey: aiProvider === 'anthropic' ? userAnthropicKey || undefined : userOpenAIKey || undefined,
+            provider: aiProvider,
           }),
         });
         if (res.ok) {
