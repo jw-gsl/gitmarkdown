@@ -22,7 +22,9 @@ GitMarkdown is a web-based markdown editor that integrates with GitHub repositor
 
 **AI** - Chat sidebar, inline editing (Ctrl+K), mermaid diagram generation, custom personas, and multi-provider support (Anthropic Claude, OpenAI).
 
-**Document Management** - File tree with drag-and-drop upload, template gallery, table of contents, backlinks, and zip export.
+**Document Management** - File tree with drag-and-drop, multi-tab editing, template gallery, table of contents, zip export, and find & replace.
+
+**Developer Experience** - Command palette (Cmd+K), keyboard shortcuts, writing checks, code viewer with syntax highlighting, and BYOK AI keys.
 
 ![Features Overview](public/screenshots/features-github-sync.png)
 
@@ -99,8 +101,9 @@ See [`.env.example`](.env.example) for the full list with inline comments.
 | `NEXT_PUBLIC_APP_URL` | App URL (default: `http://localhost:3000`) | Yes |
 | `NEXT_PUBLIC_DEFAULT_AI_PROVIDER` | `anthropic` or `openai` | Yes |
 | `NEXT_PUBLIC_DEFAULT_AI_MODEL` | Model name | Yes |
+| `WAVESPEED_API_KEY` | WaveSpeed AI key (promo video music) | No |
 
-\*At least one AI provider key is required.
+\*At least one server-side AI provider key is required, or users can bring their own keys via Settings.
 
 ### Security Rules
 
@@ -108,30 +111,76 @@ After creating your Firebase databases, apply these security rules.
 
 #### Firestore Rules
 
-Go to **Firebase Console > Firestore Database > Rules** and paste:
+Go to **Firebase Console > Firestore Database > Rules** and paste the contents of [`firestore.rules`](firestore.rules):
 
 ```
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+
+    // Helper: check if the caller is authenticated
+    function isAuth() {
+      return request.auth != null;
+    }
+
+    // Helper: check if caller uid matches the document path userId
+    function isOwner(userId) {
+      return isAuth() && request.auth.uid == userId;
+    }
+
+    // ── User-scoped data (owner only) ──────────────────────────
     match /users/{userId} {
-      allow read: if request.auth != null;
-      allow write: if request.auth != null && request.auth.uid == userId;
+      allow read, write: if isOwner(userId);
+
+      match /aiChats/{chatId} {
+        allow read, write: if isOwner(userId);
+      }
+
+      match /personas/{personaId} {
+        allow read, write: if isOwner(userId);
+      }
     }
+
+    match /userSettings/{userId} {
+      allow read, write: if isOwner(userId);
+    }
+
+    // ── Webhooks (owner only) ──────────────────────────────────
+    match /webhooks/{userId}/registrations/{wid} {
+      allow read, write: if isOwner(userId);
+    }
+
+    // ── Comments (authenticated) ───────────────────────────────
     match /comments/{commentId} {
-      allow read: if request.auth != null;
-      allow create: if request.auth != null;
-      allow update: if request.auth != null;
-      allow delete: if request.auth != null
-        && resource.data.author.uid == request.auth.uid;
+      allow read, write: if isAuth();
     }
+
+    // ── Workspaces (members only) ──────────────────────────────
     match /workspaces/{workspaceId} {
-      allow read: if request.auth != null;
-      allow create: if request.auth != null;
-      allow update: if request.auth != null;
-      match /{subcollection}/{docId} {
-        allow read: if request.auth != null;
-        allow write: if request.auth != null;
+      function isMember() {
+        return isAuth() && request.auth.uid in resource.data.members;
+      }
+
+      function isMemberForCreate() {
+        return isAuth() && request.auth.uid in request.resource.data.members;
+      }
+
+      allow read, update, delete: if isMember();
+      allow create: if isMemberForCreate();
+
+      match /files/{fileId} {
+        allow read, write: if isAuth()
+          && request.auth.uid in get(/databases/$(database)/documents/workspaces/$(workspaceId)).data.members;
+
+        match /comments/{commentId} {
+          allow read, write: if isAuth()
+            && request.auth.uid in get(/databases/$(database)/documents/workspaces/$(workspaceId)).data.members;
+        }
+      }
+
+      match /versions/{versionId} {
+        allow read, write: if isAuth()
+          && request.auth.uid in get(/databases/$(database)/documents/workspaces/$(workspaceId)).data.members;
       }
     }
   }

@@ -180,7 +180,7 @@ NEXT_PUBLIC_FIREBASE_APP_ID=1:123456789:web:abc123
 
 ## 9. Set Up AI Provider Keys
 
-At least one AI provider is required for AI features (chat sidebar, inline editing, Mermaid generation).
+At least one AI provider is required for AI features (chat sidebar, inline editing, Mermaid generation). Server-side keys are used by default, but users can also bring their own API keys via the Settings dialog (BYOK).
 
 ### Anthropic (Claude) — Recommended
 
@@ -233,6 +233,9 @@ OPENAI_API_KEY=sk-...
 NEXT_PUBLIC_APP_URL=http://localhost:3000
 NEXT_PUBLIC_DEFAULT_AI_PROVIDER=anthropic
 NEXT_PUBLIC_DEFAULT_AI_MODEL=claude-sonnet-4-20250514
+
+# Security (recommended)
+GITHUB_TOKEN_ENCRYPTION_KEY=<output of: openssl rand -hex 32>
 ```
 
 ---
@@ -241,37 +244,76 @@ NEXT_PUBLIC_DEFAULT_AI_MODEL=claude-sonnet-4-20250514
 
 ### Firestore Rules
 
-Go to **Firebase Console > Firestore Database > Rules** and replace the contents with:
+Go to **Firebase Console > Firestore Database > Rules** and replace the contents with the rules from [`firestore.rules`](../firestore.rules):
 
 ```
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Users — each user can read any profile, write only their own
+    // Helper: check if the caller is authenticated
+    function isAuth() {
+      return request.auth != null;
+    }
+
+    // Helper: check if caller uid matches the document path userId
+    function isOwner(userId) {
+      return isAuth() && request.auth.uid == userId;
+    }
+
+    // ── User-scoped data (owner only) ──────────────────────────
     match /users/{userId} {
-      allow read: if request.auth != null;
-      allow write: if request.auth != null && request.auth.uid == userId;
+      allow read, write: if isOwner(userId);
+
+      match /aiChats/{chatId} {
+        allow read, write: if isOwner(userId);
+      }
+
+      match /personas/{personaId} {
+        allow read, write: if isOwner(userId);
+      }
     }
 
-    // Comments — flat collection queried by repoFullName + filePath
+    match /userSettings/{userId} {
+      allow read, write: if isOwner(userId);
+    }
+
+    // ── Webhooks (owner only) ──────────────────────────────────
+    match /webhooks/{userId}/registrations/{wid} {
+      allow read, write: if isOwner(userId);
+    }
+
+    // ── Comments (authenticated) ───────────────────────────────
     match /comments/{commentId} {
-      allow read: if request.auth != null;
-      allow create: if request.auth != null;
-      allow update: if request.auth != null;
-      allow delete: if request.auth != null
-        && resource.data.author.uid == request.auth.uid;
+      allow read, write: if isAuth();
     }
 
-    // Workspaces and nested subcollections
+    // ── Workspaces (members only) ──────────────────────────────
     match /workspaces/{workspaceId} {
-      allow read: if request.auth != null;
-      allow create: if request.auth != null;
-      allow update: if request.auth != null;
+      function isMember() {
+        return isAuth() && request.auth.uid in resource.data.members;
+      }
 
-      match /{subcollection}/{docId} {
-        allow read: if request.auth != null;
-        allow write: if request.auth != null;
+      function isMemberForCreate() {
+        return isAuth() && request.auth.uid in request.resource.data.members;
+      }
+
+      allow read, update, delete: if isMember();
+      allow create: if isMemberForCreate();
+
+      match /files/{fileId} {
+        allow read, write: if isAuth()
+          && request.auth.uid in get(/databases/$(database)/documents/workspaces/$(workspaceId)).data.members;
+
+        match /comments/{commentId} {
+          allow read, write: if isAuth()
+            && request.auth.uid in get(/databases/$(database)/documents/workspaces/$(workspaceId)).data.members;
+        }
+      }
+
+      match /versions/{versionId} {
+        allow read, write: if isAuth()
+          && request.auth.uid in get(/databases/$(database)/documents/workspaces/$(workspaceId)).data.members;
       }
     }
   }
